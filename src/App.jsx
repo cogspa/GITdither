@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu, Activity, Tv, MoveHorizontal, Box } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import gifFrames from 'gif-frames';
@@ -81,6 +81,7 @@ export default function App() {
   const [compareSplit, setCompareSplit] = useState(50);
   const [showComparison, setShowComparison] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [isDragging, setIsDragging] = useState(false);
 
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
@@ -88,6 +89,58 @@ export default function App() {
   const [isAutoClustering, setIsAutoClustering] = useState(false);
 
   const fileInputRef = useRef(null);
+  const comparisonRef = useRef(null);
+
+  // Comparison slider mouse/touch handling
+  const handleSliderInteraction = useCallback((clientX) => {
+    if (!comparisonRef.current) return;
+    const rect = comparisonRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
+    setCompareSplit(percentage);
+  }, []);
+
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(true);
+    handleSliderInteraction(e.clientX);
+  }, [handleSliderInteraction]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!isDragging) return;
+    handleSliderInteraction(e.clientX);
+  }, [isDragging, handleSliderInteraction]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  const handleTouchStart = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(true);
+    handleSliderInteraction(e.touches[0].clientX);
+  }, [handleSliderInteraction]);
+
+  const handleTouchMove = useCallback((e) => {
+    if (!isDragging) return;
+    handleSliderInteraction(e.touches[0].clientX);
+  }, [isDragging, handleSliderInteraction]);
+
+  // Add global mouse/touch listeners when dragging
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('touchmove', handleTouchMove);
+      window.addEventListener('touchend', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleMouseUp);
+    };
+  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove]);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -427,30 +480,26 @@ export default function App() {
               <div className="preview-container">
                 {outputGif && showComparison ? (
                   <div
+                    ref={comparisonRef}
                     className="comparison-slider"
                     style={{
                       '--split': `${compareSplit}%`,
                       aspectRatio: `${dimensions.width} / ${dimensions.height}`,
                       maxWidth: '100%',
-                      maxHeight: '100%'
+                      maxHeight: '100%',
+                      cursor: 'ew-resize'
                     }}
+                    onMouseDown={handleMouseDown}
+                    onTouchStart={handleTouchStart}
                   >
-                    <img src={originalGif} className="compare-original" alt="Original" />
-                    <img src={outputGif} className="compare-output" alt="Result" />
+                    <img src={originalGif} className="compare-original" alt="Original" draggable={false} />
+                    <img src={outputGif} className="compare-output" alt="Result" draggable={false} />
                     <div className="compare-handle" style={{ left: `${compareSplit}%` }}>
                       <div className="handle-line"></div>
                       <div className="handle-circle">
                         <MoveHorizontal size={16} />
                       </div>
                     </div>
-                    <input
-                      type="range"
-                      className="compare-input"
-                      min="0"
-                      max="100"
-                      value={compareSplit}
-                      onChange={(e) => setCompareSplit(e.target.value)}
-                    />
                   </div>
                 ) : (
                   <img src={outputGif || originalGif} alt="Preview" />
