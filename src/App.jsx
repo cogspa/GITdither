@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu, Activity, Tv } from 'lucide-react';
+import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu, Activity, Tv, MoveHorizontal, Box } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import gifFrames from 'gif-frames';
 import GIF from 'gif.js';
@@ -71,11 +71,15 @@ export default function App() {
   const [painterly, setPainterly] = useState({ start: 0, end: 100, animate: false });
   const [crt, setCrt] = useState({ start: 30, end: 30, animate: false });
   const [glow, setGlow] = useState({ start: 0, end: 50, animate: false });
+  const [pixelSort, setPixelSort] = useState({ start: 0, end: 100, animate: false, threshold: 50 });
+  const [downscale, setDownscale] = useState(1);
 
   const [frameRange, setFrameRange] = useState([0, 100]);
   const [falloff, setFalloff] = useState(20);
   const [status, setStatus] = useState('');
   const [ditherAlgo, setDitherAlgo] = useState('Bayer');
+  const [compareSplit, setCompareSplit] = useState(50);
+  const [showComparison, setShowComparison] = useState(false);
 
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
@@ -163,6 +167,43 @@ export default function App() {
 
   const lerp = (v0, v1, t) => v0 * (1 - t) + v1 * t;
 
+  const performPixelSort = (canvas, amount, threshold) => {
+    const ctx = canvas.getContext('2d');
+    const { width, height } = canvas;
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+
+    // Simple vertical pixel sort
+    for (let x = 0; x < width; x++) {
+      let column = [];
+      for (let y = 0; y < height; y++) {
+        const i = (y * width + x) * 4;
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        column.push({ r: data[i], g: data[i + 1], b: data[i + 2], a: data[i + 3], bness: brightness });
+      }
+
+      // Sort segments based on threshold
+      let start = 0;
+      while (start < height) {
+        let end = start;
+        while (end < height && column[end].bness > (threshold / 100) * 255) end++;
+
+        if (end > start && Math.random() < amount / 100) {
+          const segment = column.slice(start, end).sort((a, b) => a.bness - b.bness);
+          for (let y = 0; y < segment.length; y++) {
+            const i = ((start + y) * width + x) * 4;
+            data[i] = segment[y].r;
+            data[i + 1] = segment[y].g;
+            data[i + 2] = segment[y].b;
+            data[i + 3] = segment[y].a;
+          }
+        }
+        start = end + 1;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  };
+
   const processGif = async () => {
     if (frames.length === 0) return;
     setIsProcessing(true);
@@ -172,9 +213,15 @@ export default function App() {
     const rawPalette = selectedPaletteName === 'Custom' ? customPalette : PRESET_PALETTES[selectedPaletteName];
     const cachedPalette = rawPalette ? rawPalette.map(c => chroma(c).rgb()) : null;
 
+    // Downscale targets
+    const baseWidth = frames[0].width;
+    const baseHeight = frames[0].height;
+    const workWidth = Math.floor(baseWidth / downscale);
+    const workHeight = Math.floor(baseHeight / downscale);
+
     const gif = new GIF({
       workers: 4, quality: 10,
-      width: frames[0].width, height: frames[0].height,
+      width: baseWidth, height: baseHeight,
       workerScript: '/gif.worker.js'
     });
 
@@ -185,10 +232,12 @@ export default function App() {
     for (let index = 0; index < frames.length; index++) {
       const originalFrame = frames[index];
       const canvas = document.createElement('canvas');
-      const width = originalFrame.width, height = originalFrame.height;
-      canvas.width = width; canvas.height = height;
+      canvas.width = baseWidth;
+      canvas.height = baseHeight;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(originalFrame, 0, 0);
+
+      // Draw centered or scaled original for processing
+      ctx.drawImage(originalFrame, 0, 0, baseWidth, baseHeight);
 
       let t = 0;
       if (index >= start && index <= end) {
@@ -206,13 +255,30 @@ export default function App() {
         const currentPainterly = painterly.animate ? lerp(painterly.start, painterly.end, animProgress) : painterly.start;
         const currentCRT = crt.animate ? lerp(crt.start, crt.end, animProgress) : crt.start;
         const currentGlow = glow.animate ? lerp(glow.start, glow.end, animProgress) : glow.start;
+        const currentSort = pixelSort.animate ? lerp(pixelSort.start, pixelSort.end, animProgress) : pixelSort.start;
 
+        // 1. Resolution Downscale (Internal resampling)
+        if (downscale > 1) {
+          const offCanvas = document.createElement('canvas');
+          offCanvas.width = workWidth; offCanvas.height = workHeight;
+          const offCtx = offCanvas.getContext('2d');
+          offCtx.imageSmoothingEnabled = false;
+          offCtx.drawImage(canvas, 0, 0, workWidth, workHeight);
+
+          canvas.width = workWidth; canvas.height = workHeight;
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(offCanvas, 0, 0);
+        }
+
+        const width = canvas.width;
+        const height = canvas.height;
         const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
         const strength = (currentRetro / 100) * t;
         const pStep = Math.floor(currentPainterly / 10) + 1;
         const algo = DITHER_ALGOS[ditherAlgo];
 
+        // Dithering loop
         if (algo.type === 'diffusion') {
           const errorBuffer = new Float32Array(data.length);
           for (let i = 0; i < data.length; i++) errorBuffer[i] = data[i];
@@ -242,15 +308,8 @@ export default function App() {
                 }
               }
 
-              if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) {
-                data[i] = data[i + 20] || data[i];
-              }
-
-              // CRT Scanlines
-              if (currentCRT > 0 && y % 2 === 0) {
-                const s = 1 - (currentCRT / 150) * t;
-                data[i] *= s; data[i + 1] *= s; data[i + 2] *= s;
-              }
+              if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) data[i] = data[i + 20] || data[i];
+              if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; data[i] *= s; data[i + 1] *= s; data[i + 2] *= s; }
             }
           }
         } else {
@@ -264,19 +323,19 @@ export default function App() {
               r = r + (dr - r) * strength; g = g + (dg - g) * strength; b = b + (db - b) * strength;
             }
             if (cachedPalette) { const [nr, ng, nb] = getNearestColor(r, g, b, cachedPalette); r = nr; g = ng; b = nb; }
-            if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) { r = data[i + 20] || r; }
-
-            // CRT Scanlines
-            if (currentCRT > 0 && y % 2 === 0) {
-              const s = 1 - (currentCRT / 150) * t;
-              r *= s; g *= s; b *= s;
-            }
+            if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) r = data[i + 20] || r;
+            if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; r *= s; g *= s; b *= s; }
             data[i] = r; data[i + 1] = g; data[i + 2] = b;
           }
         }
         ctx.putImageData(imageData, 0, 0);
 
-        // Glow (Bloom) application via canvas blending
+        // 2. Pixel Sort
+        if (currentSort > 0) {
+          performPixelSort(canvas, currentSort, pixelSort.threshold);
+        }
+
+        // 3. Glow (Bloom)
         if (currentGlow > 0) {
           const glowCanvas = document.createElement('canvas');
           glowCanvas.width = width; glowCanvas.height = height;
@@ -286,8 +345,19 @@ export default function App() {
           ctx.globalAlpha = (currentGlow / 150) * t;
           ctx.globalCompositeOperation = 'screen';
           ctx.drawImage(glowCanvas, 0, 0);
-          ctx.globalAlpha = 1.0;
-          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = 1.0; ctx.globalCompositeOperation = 'source-over';
+        }
+
+        // 4. Upscale back to original size if downscaled
+        if (downscale > 1) {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = baseWidth; tempCanvas.height = baseHeight;
+          const tempCtx = tempCanvas.getContext('2d');
+          tempCtx.imageSmoothingEnabled = false;
+          tempCtx.drawImage(canvas, 0, 0, baseWidth, baseHeight);
+          canvas.width = baseWidth; canvas.height = baseHeight;
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(tempCanvas, 0, 0);
         }
       }
 
@@ -297,17 +367,19 @@ export default function App() {
       if (index % 5 === 0) await new Promise(r => setTimeout(r, 0));
     }
     gif.on('progress', p => { setProgress(50 + Math.round(p * 50)); setStatus(`Rendering: ${Math.round(p * 100)}%`); });
-    gif.on('finished', blob => { setOutputGif(URL.createObjectURL(blob)); setIsProcessing(false); setStatus('Done!'); });
+    gif.on('finished', blob => { setOutputGif(URL.createObjectURL(blob)); setIsProcessing(false); setStatus('Done!'); setShowComparison(true); });
     gif.render();
   };
 
-  const ControlSlider = ({ title, value, onChange, icon: Icon }) => (
+  const ControlSlider = ({ title, value, onChange, icon: Icon, extra }) => (
     <div className="control-group">
       <div className="control-header">
         <h3><Icon size={14} /> {title}</h3>
-        <button className={`animate-toggle ${value.animate ? 'active' : ''}`} onClick={() => onChange({ ...value, animate: !value.animate })}><Activity size={12} /></button>
+        {onChange && (
+          <button className={`animate-toggle ${value.animate ? 'active' : ''}`} onClick={() => onChange({ ...value, animate: !value.animate })}><Activity size={12} /></button>
+        )}
       </div>
-      {!value.animate ? (
+      {onChange && (!value.animate ? (
         <div className="slider-container">
           <div className="slider-label"><span>Static</span><span>{Math.round(value.start)}%</span></div>
           <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value), end: parseInt(e.target.value) })} />
@@ -323,7 +395,8 @@ export default function App() {
             <input type="range" value={value.end} onChange={(e) => onChange({ ...value, end: parseInt(e.target.value) })} />
           </div>
         </div>
-      )}
+      ))}
+      {extra}
     </div>
   );
 
@@ -333,7 +406,7 @@ export default function App() {
         <div className="logo">DITHER LAB</div>
         <div className="header-actions">
           {originalGif && (
-            <button className="preset-button" onClick={() => { setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]); }}><Trash2 size={16} /> Reset</button>
+            <button className="preset-button" onClick={() => { setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]); setShowComparison(false); }}><Trash2 size={16} /> Reset</button>
           )}
         </div>
       </header>
@@ -349,7 +422,18 @@ export default function App() {
               </div>
             ) : (
               <div className="preview-container">
-                <img src={outputGif || originalGif} alt="Preview" />
+                {outputGif && showComparison ? (
+                  <div className="comparison-slider" style={{ '--split': `${compareSplit}%` }}>
+                    <img src={originalGif} className="compare-original" alt="Original" />
+                    <img src={outputGif} className="compare-output" alt="Result" />
+                    <div className="compare-handle" style={{ left: `${compareSplit}%` }}>
+                      <MoveHorizontal size={24} color="white" />
+                    </div>
+                    <input type="range" className="compare-input" min="0" max="100" value={compareSplit} onChange={(e) => setCompareSplit(e.target.value)} />
+                  </div>
+                ) : (
+                  <img src={outputGif || originalGif} alt="Preview" />
+                )}
                 {isProcessing && <div className="processing-overlay"><div className="loader"></div><p>{status} {progress}%</p></div>}
               </div>
             )}
@@ -388,11 +472,26 @@ export default function App() {
             <h3><Grid size={14} /> Dither Algorithm</h3>
             <div className="preset-grid">{Object.keys(DITHER_ALGOS).map(algo => <button key={algo} className={`preset-button ${ditherAlgo === algo ? 'active' : ''}`} onClick={() => setDitherAlgo(algo)}>{algo}</button>)}</div>
           </div>
+
+          <ControlSlider title="Downscale Factor" value={{ start: downscale }} onChange={(v) => setDownscale(v.start)} icon={Box} extra={
+            <div className="slider-container">
+              <div className="slider-label"><span>Factor</span><span>{downscale}x</span></div>
+              <input type="range" min="1" max="8" step="1" value={downscale} onChange={(e) => setDownscale(parseInt(e.target.value))} />
+            </div>
+          } />
+
+          <ControlSlider title="Pixel Sort" value={pixelSort} onChange={setPixelSort} icon={ArrowRight} extra={
+            <div className="slider-container">
+              <div className="slider-label"><span>Threshold</span><span>{pixelSort.threshold}%</span></div>
+              <input type="range" value={pixelSort.threshold} onChange={(e) => setPixelSort({ ...pixelSort, threshold: parseInt(e.target.value) })} />
+            </div>
+          } />
+
           <ControlSlider title="Dither Strength" value={retro} onChange={setRetro} icon={Activity} />
           <ControlSlider title="CRT Scanlines" value={crt} onChange={setCrt} icon={Tv} />
           <ControlSlider title="Phosphor Glow" value={glow} onChange={setGlow} icon={Zap} />
           <div className="control-group">
-            <h3><Activity size={14} /> Utility Effects</h3>
+            <h3><Activity size={14} /> Utility</h3>
             <div className="slider-container"><div className="slider-label"><span>Noisy Glitch</span><span>{glitch.start}%</span></div><input type="range" value={glitch.start} onChange={(e) => setGlitch({ ...glitch, start: parseInt(e.target.value), end: parseInt(e.target.value) })} /></div>
             <div className="slider-container"><div className="slider-label"><span>Painterly</span><span>{painterly.start}%</span></div><input type="range" value={painterly.start} onChange={(e) => setPainterly({ ...painterly, start: parseInt(e.target.value), end: parseInt(e.target.value) })} /></div>
           </div>

@@ -104,6 +104,67 @@ main {
   object-fit: contain;
 }
 
+.comparison-slider {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: ew-resize;
+}
+
+.compare-original {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain;
+  opacity: 1;
+}
+
+.compare-output {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain;
+  clip-path: polygon(var(--split) 0, 100% 0, 100% 100%, var(--split) 100%);
+  z-index: 2;
+}
+
+.compare-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: white;
+  z-index: 3;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.compare-handle svg {
+  background: black;
+  border-radius: 50%;
+  padding: 4px;
+  border: 2px solid white;
+}
+
+.compare-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: ew-resize;
+  z-index: 4;
+}
+
 .controls-panel {
   background: var(--surface-color);
   backdrop-filter: var(--glass-blur);
