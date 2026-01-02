@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu, Activity, Tv, MoveHorizontal, Box } from 'lucide-react';
+import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu, Activity, Tv, MoveHorizontal, Box, Camera, Video } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import gifFrames from 'gif-frames';
 import GIF from 'gif.js';
@@ -108,6 +108,15 @@ export default function App() {
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
   const [customPalette, setCustomPalette] = useState([]);
   const [isAutoClustering, setIsAutoClustering] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingType, setRecordingType] = useState(null); // 'camera' or 'screen'
+  const [fileType, setFileType] = useState('image'); // 'image' or 'video'
+
+  // Ref for live recording
+  const mediaRecorderRef = useRef(null);
+  const recordingStreamRef = useRef(null);
+  const recordPreviewRef = useRef(null);
+  const [recordedChunks, setRecordedChunks] = useState([]);
 
   const fileInputRef = useRef(null);
   const comparisonRef = useRef(null);
@@ -336,24 +345,132 @@ export default function App() {
     }
   }, [isResizingSelection, handleSelectionMove, handleSelectionEnd]);
 
+  const extractFramesFromVideo = useCallback((url) => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.src = url;
+      video.crossOrigin = 'anonymous';
+      video.muted = true;
+      video.playsInline = true;
+
+      video.onloadeddata = async () => {
+        const frames = [];
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const duration = video.duration;
+        const fps = 15; // Target FPS for extraction
+        const totalFrames = Math.min(Math.floor(duration * fps), 60); // Cap at 60 frames for performance
+        const interval = duration / totalFrames;
+
+        setDimensions({ width: video.videoWidth, height: video.videoHeight });
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        for (let i = 0; i < totalFrames; i++) {
+          video.currentTime = i * interval;
+          await new Promise(r => {
+            const onSeeked = () => {
+              video.removeEventListener('seeked', onSeeked);
+              ctx.drawImage(video, 0, 0);
+              const frameCanvas = document.createElement('canvas');
+              frameCanvas.width = canvas.width;
+              frameCanvas.height = canvas.height;
+              frameCanvas.getContext('2d').drawImage(canvas, 0, 0);
+              frames.push(frameCanvas);
+              setProgress(Math.round((i / totalFrames) * 100));
+              r();
+            };
+            video.addEventListener('seeked', onSeeked);
+          });
+        }
+        resolve(frames);
+      };
+    });
+  }, []);
+
+  const startRecording = async (type) => {
+    try {
+      const stream = type === 'camera'
+        ? await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        : await navigator.mediaDevices.getDisplayMedia({ video: true });
+
+      recordingStreamRef.current = stream;
+      if (recordPreviewRef.current) recordPreviewRef.current.srcObject = stream;
+
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      mediaRecorderRef.current = recorder;
+      const chunks = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        setOriginalGif(url);
+        setFileType('video');
+        setStatus('Extracting frames from recording...');
+        setIsProcessing(true);
+        const extractedFrames = await extractFramesFromVideo(url);
+        setFrames(extractedFrames);
+        setFrameRange([0, extractedFrames.length - 1]);
+        setStatus('Recording loaded.');
+        setIsProcessing(false);
+        setIsRecording(false);
+        setRecordingType(null);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingType(type);
+      setStatus(`Recording ${type}...`);
+    } catch (err) {
+      console.error(err);
+      setStatus('Recording failed');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setStatus('Loading frames...');
+
+    setStatus('Loading file...');
     setIsProcessing(true);
+    setProgress(0);
+
     try {
       const url = URL.createObjectURL(file);
       setOriginalGif(url);
-      const frameData = await gifFrames({ url, frames: 'all', outputType: 'canvas', cumulative: true });
-      const extractedFrames = frameData.map(f => f.getImage());
-      const first = extractedFrames[0];
-      setDimensions({ width: first.width, height: first.height });
-      setFrames(extractedFrames);
-      setFrameRange([0, extractedFrames.length - 1]);
-      setStatus('GIF loaded.');
+
+      if (file.type.startsWith('video/')) {
+        setFileType('video');
+        setStatus('Extracting frames from video...');
+        const extractedFrames = await extractFramesFromVideo(url);
+        setFrames(extractedFrames);
+        setFrameRange([0, extractedFrames.length - 1]);
+        setStatus('Video loaded.');
+      } else {
+        setFileType('image');
+        setStatus('Loading GIF frames...');
+        const frameData = await gifFrames({ url, frames: 'all', outputType: 'canvas', cumulative: true });
+        const extractedFrames = frameData.map(f => f.getImage());
+        const first = extractedFrames[0];
+        setDimensions({ width: first.width, height: first.height });
+        setFrames(extractedFrames);
+        setFrameRange([0, extractedFrames.length - 1]);
+        setStatus('GIF loaded.');
+      }
     } catch (err) {
       console.error(err);
-      setStatus('Error loading GIF');
+      setStatus('Error loading file');
     } finally {
       setIsProcessing(false);
     }
@@ -770,19 +887,39 @@ export default function App() {
         </div>
         <div className="header-actions">
           {originalGif && (
-            <button className="preset-button" onClick={() => { setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]); setShowComparison(false); }}><Trash2 size={16} /> Reset</button>
+            <button className="preset-button" onClick={() => { setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]); setShowComparison(false); setFileType('image'); }}><Trash2 size={16} /> Reset</button>
           )}
         </div>
       </header>
       <main>
         <section className="preview-area">
-          <div className={`upload-zone ${!originalGif ? 'empty' : ''}`} onClick={() => !originalGif && fileInputRef.current.click()}>
-            <input type="file" ref={fileInputRef} hidden accept="image/gif" onChange={handleFileUpload} />
-            {!originalGif ? (
+          <div className={`upload-zone ${(!originalGif && !isRecording) ? 'empty' : ''}`} onClick={() => !originalGif && !isRecording && fileInputRef.current.click()}>
+            <input type="file" ref={fileInputRef} hidden accept="image/gif,video/*" onChange={handleFileUpload} />
+            {(!originalGif && !isRecording) ? (
               <div className="upload-prompt">
                 <motion.div animate={{ y: [0, -10, 0] }} transition={{ repeat: Infinity, duration: 2 }}><Upload size={48} color="var(--primary-color)" /></motion.div>
-                <h2>Drop your GIF here</h2>
+                <h2>Drop GIF or Video</h2>
                 <p>or click to browse</p>
+
+                <div className="source-options">
+                  <button className="source-btn" onClick={(e) => { e.stopPropagation(); startRecording('camera'); }}>
+                    <Camera size={14} /> Camera
+                  </button>
+                  <button className="source-btn" onClick={(e) => { e.stopPropagation(); startRecording('screen'); }}>
+                    <Video size={14} /> Screen
+                  </button>
+                </div>
+              </div>
+            ) : isRecording ? (
+              <div className="recording-preview-container">
+                <video ref={recordPreviewRef} autoPlay muted playsInline className="record-preview" />
+                <div className="recording-status">
+                  <div className="rec-dot" />
+                  <span>REC ({recordingType})</span>
+                </div>
+                <button className="action-button stop-rec" onClick={(e) => { e.stopPropagation(); stopRecording(); }}>
+                  Stop Recording
+                </button>
               </div>
             ) : (
               <div className="preview-container">
@@ -800,7 +937,11 @@ export default function App() {
                     onMouseDown={handleMouseDown}
                     onTouchStart={handleTouchStart}
                   >
-                    <img src={originalGif} className="compare-original" alt="Original" draggable={false} />
+                    {fileType === 'video' ? (
+                      <video src={originalGif} className="compare-original" autoPlay muted loop playsInline style={{ pointerEvents: 'none' }} />
+                    ) : (
+                      <img src={originalGif} className="compare-original" alt="Original" draggable={false} />
+                    )}
                     <img src={outputGif} className="compare-output" alt="Result" draggable={false} />
                     <div className="compare-handle" style={{ left: `${compareSplit}%` }}>
                       <div className="handle-line"></div>
@@ -816,13 +957,25 @@ export default function App() {
                     onMouseDown={handleSelectionStart}
                     style={{ cursor: useSelection ? 'crosshair' : 'default' }}
                   >
-                    <img
-                      ref={previewImageRef}
-                      src={outputGif || originalGif}
-                      alt="Preview"
-                      draggable={false}
-                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                    />
+                    {fileType === 'video' && !outputGif ? (
+                      <video
+                        src={originalGif}
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        className="gif-preview"
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      />
+                    ) : (
+                      <img
+                        ref={previewImageRef}
+                        src={outputGif || originalGif}
+                        alt="Preview"
+                        draggable={false}
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      />
+                    )}
                     {useSelection && !outputGif && selection.w > 0 && selection.h > 0 && (
                       <div
                         className="selection-box"
