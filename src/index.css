@@ -359,6 +359,19 @@ input[type="range"]::-webkit-slider-thumb:hover {
   height: 20px;
   display: flex;
   align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 0 10px;
+}
+
+.timeline-slider::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 4px;
+  background: var(--border-color);
+  border-radius: 2px;
 }
 
 .palette-preview {
@@ -404,6 +417,11 @@ input[type="range"]::-webkit-slider-thumb:hover {
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  width: calc(100% - 20px);
+  pointer-events: none;
 }
 
 .timeline-slider input[type="range"]::-webkit-slider-thumb {
