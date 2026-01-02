@@ -83,6 +83,12 @@ export default function App() {
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [isDragging, setIsDragging] = useState(false);
 
+  // Selection Tool State
+  const [useSelection, setUseSelection] = useState(false);
+  const [selection, setSelection] = useState({ x: 10, y: 10, w: 80, h: 80 }); // Percentages
+  const [isResizingSelection, setIsResizingSelection] = useState(false);
+  const [selectionStart, setSelectionStart] = useState({ x: 0, y: 0 });
+
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
   const [customPalette, setCustomPalette] = useState([]);
@@ -126,6 +132,35 @@ export default function App() {
     handleSliderInteraction(e.touches[0].clientX);
   }, [isDragging, handleSliderInteraction]);
 
+  // Selection mouse handling
+  const handleSelectionStart = (e) => {
+    if (!useSelection || showComparison) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setSelectionStart({ x, y });
+    setIsResizingSelection(true);
+    setSelection({ x, y, w: 0, h: 0 });
+  };
+
+  const handleSelectionMove = (e) => {
+    if (!isResizingSelection) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+    setSelection({
+      x: Math.min(x, selectionStart.x),
+      y: Math.min(y, selectionStart.y),
+      w: Math.abs(x - selectionStart.x),
+      h: Math.abs(y - selectionStart.y)
+    });
+  };
+
+  const handleSelectionEnd = () => {
+    setIsResizingSelection(false);
+  };
+
   // Add global mouse/touch listeners when dragging
   useEffect(() => {
     if (isDragging) {
@@ -134,13 +169,17 @@ export default function App() {
       window.addEventListener('touchmove', handleTouchMove);
       window.addEventListener('touchend', handleMouseUp);
     }
+    if (isResizingSelection) {
+      window.addEventListener('mouseup', handleSelectionEnd);
+    }
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleMouseUp);
+      window.removeEventListener('mouseup', handleSelectionEnd);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove]);
+  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove, isResizingSelection]);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -304,6 +343,16 @@ export default function App() {
         if (distFromEnd < falloffFrames) t = Math.min(t, distFromEnd / falloffFrames);
       }
 
+      // Check if pixel is in selection
+      const isInSelection = (px, py, w, h) => {
+        if (!useSelection) return true;
+        const sx = (selection.x / 100) * w;
+        const sy = (selection.y / 100) * h;
+        const sw = (selection.w / 100) * w;
+        const sh = (selection.h / 100) * h;
+        return px >= sx && px <= sx + sw && py >= sy && py <= sy + sh;
+      };
+
       if (t > 0) {
         const animProgress = (index - start) / totalSelected;
         const currentRetro = retro.animate ? lerp(retro.start, retro.end, animProgress) : retro.start;
@@ -344,44 +393,53 @@ export default function App() {
               const i = (y * width + x) * 4;
               let r = errorBuffer[i], g = errorBuffer[i + 1], b = errorBuffer[i + 2];
 
-              if (currentPainterly > 0) {
-                r = Math.round(r / (pStep * 20)) * (pStep * 20);
-                g = Math.round(g / (pStep * 20)) * (pStep * 20);
-                b = Math.round(b / (pStep * 20)) * (pStep * 20);
-              }
-
-              let [nr, ng, nb] = cachedPalette ? getNearestColor(r, g, b, cachedPalette) : [r > 127 ? 255 : 0, g > 127 ? 255 : 0, b > 127 ? 255 : 0];
-
-              const blendR = r + (nr - r) * strength, blendG = g + (ng - g) * strength, blendB = b + (nb - b) * strength;
-              data[i] = blendR; data[i + 1] = blendG; data[i + 2] = blendB;
-
-              const er = r - blendR, eg = g - blendG, eb = b - blendB;
-              for (const k of algo.kernel) {
-                const nx = x + k.x, ny = y + k.y;
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                  const ni = (ny * width + nx) * 4;
-                  errorBuffer[ni] += er * k.w; errorBuffer[ni + 1] += eg * k.w; errorBuffer[ni + 2] += eb * k.w;
+              if (isInSelection(x, y, width, height)) {
+                if (currentPainterly > 0) {
+                  r = Math.round(r / (pStep * 20)) * (pStep * 20);
+                  g = Math.round(g / (pStep * 20)) * (pStep * 20);
+                  b = Math.round(b / (pStep * 20)) * (pStep * 20);
                 }
-              }
 
-              if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) data[i] = data[i + 20] || data[i];
-              if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; data[i] *= s; data[i + 1] *= s; data[i + 2] *= s; }
+                let [nr, ng, nb] = cachedPalette ? getNearestColor(r, g, b, cachedPalette) : [r > 127 ? 255 : 0, g > 127 ? 255 : 0, b > 127 ? 255 : 0];
+
+                const blendR = r + (nr - r) * strength, blendG = g + (ng - g) * strength, blendB = b + (nb - b) * strength;
+                data[i] = blendR; data[i + 1] = blendG; data[i + 2] = blendB;
+
+                const er = r - blendR, eg = g - blendG, eb = b - blendB;
+                for (const k of algo.kernel) {
+                  const nx = x + k.x, ny = y + k.y;
+                  if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                    const ni = (ny * width + nx) * 4;
+                    errorBuffer[ni] += er * k.w; errorBuffer[ni + 1] += eg * k.w; errorBuffer[ni + 2] += eb * k.w;
+                  }
+                }
+
+                if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) data[i] = data[i + 20] || data[i];
+                if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; data[i] *= s; data[i + 1] *= s; data[i + 2] *= s; }
+              } else {
+                data[i] = originalFrame.width === canvas.width ? errorBuffer[i] : data[i];
+                data[i + 1] = originalFrame.width === canvas.width ? errorBuffer[i + 1] : data[i + 1];
+                data[i + 2] = originalFrame.width === canvas.width ? errorBuffer[i + 2] : data[i + 2];
+              }
             }
           }
         } else {
           for (let i = 0; i < data.length; i += 4) {
             let r = data[i], g = data[i + 1], b = data[i + 2];
             const x = (i / 4) % width, y = Math.floor((i / 4) / width);
-            if (currentPainterly > 0) { r = Math.round(r / (pStep * 20)) * (pStep * 20); g = Math.round(g / (pStep * 20)) * (pStep * 20); b = Math.round(b / (pStep * 20)) * (pStep * 20); }
-            if (currentRetro > 0) {
-              const threshold = bayerMatrix8x8[y % 8][x % 8] / 64 * 255;
-              const dr = r > threshold ? 255 : 0, dg = g > threshold ? 255 : 0, db = b > threshold ? 255 : 0;
-              r = r + (dr - r) * strength; g = g + (dg - g) * strength; b = b + (db - b) * strength;
+
+            if (isInSelection(x, y, width, height)) {
+              if (currentPainterly > 0) { r = Math.round(r / (pStep * 20)) * (pStep * 20); g = Math.round(g / (pStep * 20)) * (pStep * 20); b = Math.round(b / (pStep * 20)) * (pStep * 20); }
+              if (currentRetro > 0) {
+                const threshold = bayerMatrix8x8[y % 8][x % 8] / 64 * 255;
+                const dr = r > threshold ? 255 : 0, dg = g > threshold ? 255 : 0, db = b > threshold ? 255 : 0;
+                r = r + (dr - r) * strength; g = g + (dg - g) * strength; b = b + (db - b) * strength;
+              }
+              if (cachedPalette) { const [nr, ng, nb] = getNearestColor(r, g, b, cachedPalette); r = nr; g = ng; b = nb; }
+              if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) r = data[i + 20] || r;
+              if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; r *= s; g *= s; b *= s; }
+              data[i] = r; data[i + 1] = g; data[i + 2] = b;
             }
-            if (cachedPalette) { const [nr, ng, nb] = getNearestColor(r, g, b, cachedPalette); r = nr; g = ng; b = nb; }
-            if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) r = data[i + 20] || r;
-            if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; r *= s; g *= s; b *= s; }
-            data[i] = r; data[i + 1] = g; data[i + 2] = b;
           }
         }
         ctx.putImageData(imageData, 0, 0);
@@ -502,7 +560,26 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <img src={outputGif || originalGif} alt="Preview" />
+                  <div
+                    className="preview-wrapper"
+                    onMouseDown={handleSelectionStart}
+                    onMouseMove={handleSelectionMove}
+                  >
+                    <img src={outputGif || originalGif} alt="Preview" draggable={false} />
+                    {useSelection && !outputGif && (
+                      <div
+                        className="selection-box"
+                        style={{
+                          left: `${selection.x}%`,
+                          top: `${selection.y}%`,
+                          width: `${selection.w}%`,
+                          height: `${selection.h}%`
+                        }}
+                      >
+                        <div className="selection-label">Target Region</div>
+                      </div>
+                    )}
+                  </div>
                 )}
                 {isProcessing && <div className="processing-overlay"><div className="loader"></div><p>{status} {progress}%</p></div>}
               </div>
@@ -541,6 +618,16 @@ export default function App() {
           <div className="control-group">
             <h3><Grid size={14} /> Dither Algorithm</h3>
             <div className="preset-grid">{Object.keys(DITHER_ALGOS).map(algo => <button key={algo} className={`preset-button ${ditherAlgo === algo ? 'active' : ''}`} onClick={() => setDitherAlgo(algo)}>{algo}</button>)}</div>
+          </div>
+
+          <div className="control-group">
+            <div className="control-header">
+              <h3><Layers size={14} /> Region Mask</h3>
+              <button className={`animate-toggle ${useSelection ? 'active' : ''}`} onClick={() => { setUseSelection(!useSelection); setShowComparison(false); }} title="Toggle Selection Tool">
+                <Box size={14} />
+              </button>
+            </div>
+            {useSelection && <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '4px' }}>Click and drag on the preview to select a region.</p>}
           </div>
 
           <ControlSlider title="Downscale Factor" value={{ start: downscale }} onChange={(v) => setDownscale(v.start)} icon={Box} extra={
