@@ -948,6 +948,9 @@ export default function App() {
           {outputGif && <a href={outputGif} download="dithered.gif" className="action-button" style={{ textAlign: 'center', textDecoration: 'none', background: 'var(--primary-color)', color: 'black' }}>Download Result <Download size={16} /></a>}
         </aside>
       </main>
+      <footer className="app-footer">
+        <p>By Joe Micallef. 2026. <a href="mailto:jmicalle@gmail.com">jmicalle@gmail.com</a></p>
+      </footer>
       <AnimatePresence>{status && <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="status-toast"><div className="status-dot"></div>{status}</motion.div>}</AnimatePresence>
     </div>
   );
