@@ -837,3 +837,27 @@ input[type="range"]::-webkit-slider-thumb:hover {
     height: 300px;
   }
 }
+.app-footer {
+  padding: 1rem 2rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-color);
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.app-footer a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .app-footer {
+    padding: 1.5rem;
+    margin-bottom: 0;
+  }
+}
