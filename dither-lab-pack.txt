@@ -464,22 +464,25 @@ main {
 
 .preview-wrapper {
   position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.preview-wrapper img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
 .selection-box {
   position: absolute;
   border: 2px dashed var(--primary-color);
-  background: rgba(0, 242, 255, 0.1);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+  background: rgba(0, 242, 255, 0.15);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
   pointer-events: none;
   z-index: 10;
-  transition: opacity 0.2s;
 }
 
 .selection-label {
@@ -495,6 +498,7 @@ main {
   white-space: nowrap;
   text-transform: uppercase;
 }
+
 
 .controls-panel {
   background: var(--surface-color);
@@ -961,7 +965,7 @@ export default function App() {
 
   // Selection Tool State
   const [useSelection, setUseSelection] = useState(false);
-  const [selection, setSelection] = useState({ x: 10, y: 10, w: 80, h: 80 }); // Percentages
+  const [selection, setSelection] = useState({ x: 10, y: 10, w: 80, h: 80 }); // Percentages of IMAGE (not container)
   const [isResizingSelection, setIsResizingSelection] = useState(false);
   const [selectionStart, setSelectionStart] = useState({ x: 0, y: 0 });
 
@@ -972,6 +976,74 @@ export default function App() {
 
   const fileInputRef = useRef(null);
   const comparisonRef = useRef(null);
+  const previewImageRef = useRef(null);
+  const previewWrapperRef = useRef(null);
+
+  // Helper: Get the actual rendered bounds of the image within its container
+  const getImageBounds = useCallback(() => {
+    const img = previewImageRef.current;
+    const wrapper = previewWrapperRef.current;
+    if (!img || !wrapper) return null;
+
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const imgNaturalWidth = dimensions.width || img.naturalWidth;
+    const imgNaturalHeight = dimensions.height || img.naturalHeight;
+
+    if (!imgNaturalWidth || !imgNaturalHeight) return null;
+
+    // Calculate how the image is rendered with object-fit: contain
+    const wrapperAspect = wrapperRect.width / wrapperRect.height;
+    const imgAspect = imgNaturalWidth / imgNaturalHeight;
+
+    let renderedWidth, renderedHeight, offsetX, offsetY;
+
+    if (imgAspect > wrapperAspect) {
+      // Image is wider - letterbox top/bottom
+      renderedWidth = wrapperRect.width;
+      renderedHeight = wrapperRect.width / imgAspect;
+      offsetX = 0;
+      offsetY = (wrapperRect.height - renderedHeight) / 2;
+    } else {
+      // Image is taller - letterbox left/right
+      renderedHeight = wrapperRect.height;
+      renderedWidth = wrapperRect.height * imgAspect;
+      offsetX = (wrapperRect.width - renderedWidth) / 2;
+      offsetY = 0;
+    }
+
+    return {
+      wrapperRect,
+      offsetX,
+      offsetY,
+      renderedWidth,
+      renderedHeight
+    };
+  }, [dimensions]);
+
+  // Convert client coordinates to image percentage coordinates
+  const clientToImagePercent = useCallback((clientX, clientY) => {
+    const bounds = getImageBounds();
+    if (!bounds) return { x: 0, y: 0, inBounds: false };
+
+    const { wrapperRect, offsetX, offsetY, renderedWidth, renderedHeight } = bounds;
+
+    // Position relative to wrapper
+    const relX = clientX - wrapperRect.left;
+    const relY = clientY - wrapperRect.top;
+
+    // Position relative to the actual image area
+    const imgX = relX - offsetX;
+    const imgY = relY - offsetY;
+
+    // Check if within image bounds
+    const inBounds = imgX >= 0 && imgX <= renderedWidth && imgY >= 0 && imgY <= renderedHeight;
+
+    // Convert to percentage (clamped to 0-100)
+    const percentX = Math.max(0, Math.min(100, (imgX / renderedWidth) * 100));
+    const percentY = Math.max(0, Math.min(100, (imgY / renderedHeight) * 100));
+
+    return { x: percentX, y: percentY, inBounds };
+  }, [getImageBounds]);
 
   // Comparison slider mouse/touch handling
   const handleSliderInteraction = useCallback((clientX) => {
@@ -1008,22 +1080,22 @@ export default function App() {
     handleSliderInteraction(e.touches[0].clientX);
   }, [isDragging, handleSliderInteraction]);
 
-  // Selection mouse handling
-  const handleSelectionStart = (e) => {
+  // Selection mouse handling - now using image-relative coordinates
+  const handleSelectionStart = useCallback((e) => {
     if (!useSelection || showComparison) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+    const { x, y, inBounds } = clientToImagePercent(e.clientX, e.clientY);
+    if (!inBounds) return;
+
     setSelectionStart({ x, y });
     setIsResizingSelection(true);
     setSelection({ x, y, w: 0, h: 0 });
-  };
+  }, [useSelection, showComparison, clientToImagePercent]);
 
-  const handleSelectionMove = (e) => {
+  const handleSelectionMove = useCallback((e) => {
     if (!isResizingSelection) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+    const { x, y } = clientToImagePercent(e.clientX, e.clientY);
 
     setSelection({
       x: Math.min(x, selectionStart.x),
@@ -1031,11 +1103,11 @@ export default function App() {
       w: Math.abs(x - selectionStart.x),
       h: Math.abs(y - selectionStart.y)
     });
-  };
+  }, [isResizingSelection, selectionStart, clientToImagePercent]);
 
-  const handleSelectionEnd = () => {
+  const handleSelectionEnd = useCallback(() => {
     setIsResizingSelection(false);
-  };
+  }, []);
 
   // Add global mouse/touch listeners when dragging
   useEffect(() => {
@@ -1045,17 +1117,26 @@ export default function App() {
       window.addEventListener('touchmove', handleTouchMove);
       window.addEventListener('touchend', handleMouseUp);
     }
-    if (isResizingSelection) {
-      window.addEventListener('mouseup', handleSelectionEnd);
-    }
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleMouseUp);
-      window.removeEventListener('mouseup', handleSelectionEnd);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove, isResizingSelection]);
+  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove]);
+
+  // Global listeners for selection dragging
+  useEffect(() => {
+    if (isResizingSelection) {
+      const moveHandler = (e) => handleSelectionMove(e);
+      window.addEventListener('mousemove', moveHandler);
+      window.addEventListener('mouseup', handleSelectionEnd);
+      return () => {
+        window.removeEventListener('mousemove', moveHandler);
+        window.removeEventListener('mouseup', handleSelectionEnd);
+      };
+    }
+  }, [isResizingSelection, handleSelectionMove, handleSelectionEnd]);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -1138,7 +1219,7 @@ export default function App() {
 
   const lerp = (v0, v1, t) => v0 * (1 - t) + v1 * t;
 
-  const performPixelSort = (canvas, amount, threshold) => {
+  const performPixelSort = (canvas, amount, threshold, isInSelection) => {
     const ctx = canvas.getContext('2d');
     const { width, height } = canvas;
     const imageData = ctx.getImageData(0, 0, width, height);
@@ -1150,14 +1231,14 @@ export default function App() {
       for (let y = 0; y < height; y++) {
         const i = (y * width + x) * 4;
         const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        column.push({ r: data[i], g: data[i + 1], b: data[i + 2], a: data[i + 3], bness: brightness });
+        column.push({ r: data[i], g: data[i + 1], b: data[i + 2], a: data[i + 3], bness: brightness, inSel: isInSelection(x, y, width, height) });
       }
 
-      // Sort segments based on threshold
+      // Sort segments based on threshold - only within selection
       let start = 0;
       while (start < height) {
         let end = start;
-        while (end < height && column[end].bness > (threshold / 100) * 255) end++;
+        while (end < height && column[end].bness > (threshold / 100) * 255 && column[end].inSel) end++;
 
         if (end > start && Math.random() < amount / 100) {
           const segment = column.slice(start, end).sort((a, b) => a.bness - b.bness);
@@ -1200,6 +1281,21 @@ export default function App() {
     const end = frameRange[1];
     const totalSelected = end - start + 1;
 
+    // Precompute selection bounds in pixels (for current working dimensions)
+    // Selection is stored as percentages of the image
+    const getSelectionBounds = (w, h) => {
+      if (!useSelection || selection.w === 0 || selection.h === 0) {
+        return { sx: 0, sy: 0, sw: w, sh: h, enabled: false };
+      }
+      return {
+        sx: Math.floor((selection.x / 100) * w),
+        sy: Math.floor((selection.y / 100) * h),
+        sw: Math.floor((selection.w / 100) * w),
+        sh: Math.floor((selection.h / 100) * h),
+        enabled: true
+      };
+    };
+
     for (let index = 0; index < frames.length; index++) {
       const originalFrame = frames[index];
       const canvas = document.createElement('canvas');
@@ -1207,7 +1303,7 @@ export default function App() {
       canvas.height = baseHeight;
       const ctx = canvas.getContext('2d');
 
-      // Draw centered or scaled original for processing
+      // Draw original frame
       ctx.drawImage(originalFrame, 0, 0, baseWidth, baseHeight);
 
       let t = 0;
@@ -1221,12 +1317,12 @@ export default function App() {
 
       // Check if pixel is in selection
       const isInSelection = (px, py, w, h) => {
-        if (!useSelection) return true;
+        if (!useSelection || selection.w === 0 || selection.h === 0) return true;
         const sx = (selection.x / 100) * w;
         const sy = (selection.y / 100) * h;
         const sw = (selection.w / 100) * w;
         const sh = (selection.h / 100) * h;
-        return px >= sx && px <= sx + sw && py >= sy && py <= sy + sh;
+        return px >= sx && px < sx + sw && py >= sy && py < sy + sh;
       };
 
       if (t > 0) {
@@ -1255,6 +1351,10 @@ export default function App() {
         const height = canvas.height;
         const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
+
+        // Store original data for non-selected pixels
+        const originalData = new Uint8ClampedArray(data);
+
         const strength = (currentRetro / 100) * t;
         const pStep = Math.floor(currentPainterly / 10) + 1;
         const algo = DITHER_ALGOS[ditherAlgo];
@@ -1293,19 +1393,25 @@ export default function App() {
                 if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) data[i] = data[i + 20] || data[i];
                 if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; data[i] *= s; data[i + 1] *= s; data[i + 2] *= s; }
               } else {
-                data[i] = originalFrame.width === canvas.width ? errorBuffer[i] : data[i];
-                data[i + 1] = originalFrame.width === canvas.width ? errorBuffer[i + 1] : data[i + 1];
-                data[i + 2] = originalFrame.width === canvas.width ? errorBuffer[i + 2] : data[i + 2];
+                // Keep original pixel data for non-selected areas
+                data[i] = originalData[i];
+                data[i + 1] = originalData[i + 1];
+                data[i + 2] = originalData[i + 2];
               }
             }
           }
         } else {
           for (let i = 0; i < data.length; i += 4) {
-            let r = data[i], g = data[i + 1], b = data[i + 2];
             const x = (i / 4) % width, y = Math.floor((i / 4) / width);
 
             if (isInSelection(x, y, width, height)) {
-              if (currentPainterly > 0) { r = Math.round(r / (pStep * 20)) * (pStep * 20); g = Math.round(g / (pStep * 20)) * (pStep * 20); b = Math.round(b / (pStep * 20)) * (pStep * 20); }
+              let r = data[i], g = data[i + 1], b = data[i + 2];
+
+              if (currentPainterly > 0) {
+                r = Math.round(r / (pStep * 20)) * (pStep * 20);
+                g = Math.round(g / (pStep * 20)) * (pStep * 20);
+                b = Math.round(b / (pStep * 20)) * (pStep * 20);
+              }
               if (currentRetro > 0) {
                 const threshold = bayerMatrix8x8[y % 8][x % 8] / 64 * 255;
                 const dr = r > threshold ? 255 : 0, dg = g > threshold ? 255 : 0, db = b > threshold ? 255 : 0;
@@ -1316,25 +1422,45 @@ export default function App() {
               if (currentCRT > 0 && y % 2 === 0) { const s = 1 - (currentCRT / 150) * t; r *= s; g *= s; b *= s; }
               data[i] = r; data[i + 1] = g; data[i + 2] = b;
             }
+            // Non-selected pixels already have original data, no need to change
           }
         }
         ctx.putImageData(imageData, 0, 0);
 
-        // 2. Pixel Sort
+        // 2. Pixel Sort (with selection awareness)
         if (currentSort > 0) {
-          performPixelSort(canvas, currentSort, pixelSort.threshold);
+          performPixelSort(canvas, currentSort, pixelSort.threshold, isInSelection);
         }
 
-        // 3. Glow (Bloom)
+        // 3. Glow (Bloom) - only apply to selected region
         if (currentGlow > 0) {
           const glowCanvas = document.createElement('canvas');
           glowCanvas.width = width; glowCanvas.height = height;
           const glowCtx = glowCanvas.getContext('2d');
-          glowCtx.filter = `blur(${Math.max(1, currentGlow / 10)}px)`;
-          glowCtx.drawImage(canvas, 0, 0);
-          ctx.globalAlpha = (currentGlow / 150) * t;
-          ctx.globalCompositeOperation = 'screen';
-          ctx.drawImage(glowCanvas, 0, 0);
+
+          // If selection is enabled, mask the glow to the selection area
+          if (useSelection && selection.w > 0 && selection.h > 0) {
+            const selBounds = getSelectionBounds(width, height);
+            glowCtx.filter = `blur(${Math.max(1, currentGlow / 10)}px)`;
+            glowCtx.drawImage(canvas, selBounds.sx, selBounds.sy, selBounds.sw, selBounds.sh,
+              selBounds.sx, selBounds.sy, selBounds.sw, selBounds.sh);
+
+            // Create a mask for the selection area
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(selBounds.sx, selBounds.sy, selBounds.sw, selBounds.sh);
+            ctx.clip();
+            ctx.globalAlpha = (currentGlow / 150) * t;
+            ctx.globalCompositeOperation = 'screen';
+            ctx.drawImage(glowCanvas, 0, 0);
+            ctx.restore();
+          } else {
+            glowCtx.filter = `blur(${Math.max(1, currentGlow / 10)}px)`;
+            glowCtx.drawImage(canvas, 0, 0);
+            ctx.globalAlpha = (currentGlow / 150) * t;
+            ctx.globalCompositeOperation = 'screen';
+            ctx.drawImage(glowCanvas, 0, 0);
+          }
           ctx.globalAlpha = 1.0; ctx.globalCompositeOperation = 'source-over';
         }
 
@@ -1390,6 +1516,21 @@ export default function App() {
     </div>
   );
 
+  // Calculate selection box position relative to the actual image for display
+  const getSelectionStyle = useCallback(() => {
+    const bounds = getImageBounds();
+    if (!bounds || !useSelection) return { display: 'none' };
+
+    const { offsetX, offsetY, renderedWidth, renderedHeight } = bounds;
+
+    return {
+      left: `${offsetX + (selection.x / 100) * renderedWidth}px`,
+      top: `${offsetY + (selection.y / 100) * renderedHeight}px`,
+      width: `${(selection.w / 100) * renderedWidth}px`,
+      height: `${(selection.h / 100) * renderedHeight}px`,
+    };
+  }, [getImageBounds, useSelection, selection]);
+
   return (
     <div className="app-container">
       <header>
@@ -1437,22 +1578,24 @@ export default function App() {
                   </div>
                 ) : (
                   <div
+                    ref={previewWrapperRef}
                     className="preview-wrapper"
                     onMouseDown={handleSelectionStart}
-                    onMouseMove={handleSelectionMove}
+                    style={{ cursor: useSelection ? 'crosshair' : 'default' }}
                   >
-                    <img src={outputGif || originalGif} alt="Preview" draggable={false} />
-                    {useSelection && !outputGif && (
+                    <img
+                      ref={previewImageRef}
+                      src={outputGif || originalGif}
+                      alt="Preview"
+                      draggable={false}
+                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                    />
+                    {useSelection && !outputGif && selection.w > 0 && selection.h > 0 && (
                       <div
                         className="selection-box"
-                        style={{
-                          left: `${selection.x}%`,
-                          top: `${selection.y}%`,
-                          width: `${selection.w}%`,
-                          height: `${selection.h}%`
-                        }}
+                        style={getSelectionStyle()}
                       >
-                        <div className="selection-label">Target Region</div>
+                        <div className="selection-label">Target Region ({Math.round(selection.w)}% × {Math.round(selection.h)}%)</div>
                       </div>
                     )}
                   </div>
@@ -1499,14 +1642,25 @@ export default function App() {
           <div className="control-group">
             <div className="control-header">
               <h3><Layers size={14} /> Region Mask</h3>
-              <button className={`animate-toggle ${useSelection ? 'active' : ''}`} onClick={() => { setUseSelection(!useSelection); setShowComparison(false); }} title="Toggle Selection Tool">
+              <button className={`animate-toggle ${useSelection ? 'active' : ''}`} onClick={() => { setUseSelection(!useSelection); setShowComparison(false); setOutputGif(null); }} title="Toggle Selection Tool">
                 <Box size={14} />
               </button>
             </div>
-            {useSelection && <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '4px' }}>Click and drag on the preview to select a region.</p>}
+            {useSelection && (
+              <>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '4px' }}>
+                  Click and drag on the preview to select a region. Only this area will be dithered.
+                </p>
+                {selection.w > 0 && selection.h > 0 && (
+                  <p style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '4px' }}>
+                    Selection: {Math.round(selection.x)}%, {Math.round(selection.y)}% → {Math.round(selection.w)}% × {Math.round(selection.h)}%
+                  </p>
+                )}
+              </>
+            )}
           </div>
 
-          <ControlSlider title="Downscale Factor" value={{ start: downscale }} onChange={(v) => setDownscale(v.start)} icon={Box} extra={
+          <ControlSlider title="Downscale Factor" value={{ start: downscale }} onChange={null} icon={Box} extra={
             <div className="slider-container">
               <div className="slider-label"><span>Factor</span><span>{downscale}x</span></div>
               <input type="range" min="1" max="8" step="1" value={downscale} onChange={(e) => setDownscale(parseInt(e.target.value))} />

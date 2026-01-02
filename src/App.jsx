@@ -85,9 +85,16 @@ export default function App() {
 
   // Selection Tool State
   const [useSelection, setUseSelection] = useState(false);
-  const [selection, setSelection] = useState({ x: 10, y: 10, w: 80, h: 80 }); // Percentages of IMAGE (not container)
+  const [selection, setSelection] = useState({ x: 10, y: 10, w: 80, h: 80 });
   const [isResizingSelection, setIsResizingSelection] = useState(false);
   const [selectionStart, setSelectionStart] = useState({ x: 0, y: 0 });
+
+  // History & Persistence State
+  const [history, setHistory] = useState([]);
+  const [sidebarWidth, setSidebarWidth] = useState(380);
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [showHistory, setShowHistory] = useState(true);
 
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
@@ -164,6 +171,69 @@ export default function App() {
 
     return { x: percentX, y: percentY, inBounds };
   }, [getImageBounds]);
+
+  // Hydrate from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('dither-lab-settings');
+    if (saved) {
+      try {
+        const settings = JSON.parse(saved);
+        if (settings.retro) setRetro(settings.retro);
+        if (settings.glitch) setGlitch(settings.glitch);
+        if (settings.painterly) setPainterly(settings.painterly);
+        if (settings.crt) setCrt(settings.crt);
+        if (settings.glow) setGlow(settings.glow);
+        if (settings.pixelSort) setPixelSort(settings.pixelSort);
+        if (settings.downscale) setDownscale(settings.downscale);
+        if (settings.selectedPaletteName) setSelectedPaletteName(settings.selectedPaletteName);
+        if (settings.customPalette) setCustomPalette(settings.customPalette);
+        if (settings.ditherAlgo) setDitherAlgo(settings.ditherAlgo);
+        if (settings.sidebarWidth) setSidebarWidth(settings.sidebarWidth);
+        if (settings.collapsedGroups) setCollapsedGroups(settings.collapsedGroups);
+      } catch (e) {
+        console.error("Failed to hydrate settings", e);
+      }
+    }
+  }, []);
+
+  // Save to localStorage
+  useEffect(() => {
+    const settings = {
+      retro, glitch, painterly, crt, glow, pixelSort, downscale,
+      selectedPaletteName, customPalette, ditherAlgo, sidebarWidth, collapsedGroups
+    };
+    localStorage.setItem('dither-lab-settings', JSON.stringify(settings));
+  }, [retro, glitch, painterly, crt, glow, pixelSort, downscale, selectedPaletteName, customPalette, ditherAlgo, sidebarWidth, collapsedGroups]);
+
+  // Resizable Sidebar Handling
+  const startResizing = useCallback((e) => {
+    e.preventDefault();
+    setIsResizingSidebar(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizingSidebar(false);
+  }, []);
+
+  const resize = useCallback((e) => {
+    if (isResizingSidebar) {
+      const newWidth = window.innerWidth - e.clientX;
+      if (newWidth > 250 && newWidth < 800) {
+        setSidebarWidth(newWidth);
+      }
+    }
+  }, [isResizingSidebar]);
+
+  useEffect(() => {
+    if (isResizingSidebar) {
+      window.addEventListener('mousemove', resize);
+      window.addEventListener('mouseup', stopResizing);
+    }
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [isResizingSidebar, resize, stopResizing]);
 
   // Comparison slider mouse/touch handling
   const handleSliderInteraction = useCallback((clientX) => {
@@ -603,38 +673,62 @@ export default function App() {
       if (index % 5 === 0) await new Promise(r => setTimeout(r, 0));
     }
     gif.on('progress', p => { setProgress(50 + Math.round(p * 50)); setStatus(`Rendering: ${Math.round(p * 100)}%`); });
-    gif.on('finished', blob => { setOutputGif(URL.createObjectURL(blob)); setIsProcessing(false); setStatus('Done!'); setShowComparison(true); });
+    gif.on('finished', blob => {
+      const url = URL.createObjectURL(blob);
+      setOutputGif(url);
+      setIsProcessing(false);
+      setStatus('Done!');
+      setShowComparison(true);
+
+      // Add to history
+      setHistory(prev => [{
+        id: Date.now(),
+        url,
+        timestamp: new Date().toLocaleTimeString(),
+        settings: { ditherAlgo, palette: selectedPaletteName, retro: retro.start }
+      }, ...prev].slice(0, 10)); // Keep last 10
+    });
     gif.render();
   };
 
-  const ControlSlider = ({ title, value, onChange, icon: Icon, extra }) => (
-    <div className="control-group">
-      <div className="control-header">
-        <h3><Icon size={14} /> {title}</h3>
-        {onChange && (
-          <button className={`animate-toggle ${value.animate ? 'active' : ''}`} onClick={() => onChange({ ...value, animate: !value.animate })}><Activity size={12} /></button>
+  const ControlSlider = ({ title, value, onChange, icon: Icon, extra, id }) => {
+    const isCollapsed = collapsedGroups[id];
+    return (
+      <div className={`control-group ${isCollapsed ? 'collapsed' : ''}`}>
+        <div className="control-header" onClick={() => id && setCollapsedGroups(prev => ({ ...prev, [id]: !prev[id] }))} style={{ cursor: id ? 'pointer' : 'default' }}>
+          <h3><Icon size={14} /> {title}</h3>
+          <div className="header-controls">
+            {onChange && (
+              <button className={`animate-toggle ${value.animate ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); onChange({ ...value, animate: !value.animate }); }}><Activity size={12} /></button>
+            )}
+            {id && <button className="collapse-btn">{isCollapsed ? <Plus size={12} /> : <X size={12} />}</button>}
+          </div>
+        </div>
+        {!isCollapsed && (
+          <>
+            {onChange && (!value.animate ? (
+              <div className="slider-container">
+                <div className="slider-label"><span>Static</span><span>{Math.round(value.start)}%</span></div>
+                <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value), end: parseInt(e.target.value) })} />
+              </div>
+            ) : (
+              <div className="animation-sliders">
+                <div className="slider-container">
+                  <div className="slider-label"><span>Start</span><span>{Math.round(value.start)}%</span></div>
+                  <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value) })} />
+                </div>
+                <div className="slider-container">
+                  <div className="slider-label"><span>End</span><span>{Math.round(value.end)}%</span></div>
+                  <input type="range" value={value.end} onChange={(e) => onChange({ ...value, end: parseInt(e.target.value) })} />
+                </div>
+              </div>
+            ))}
+            {extra}
+          </>
         )}
       </div>
-      {onChange && (!value.animate ? (
-        <div className="slider-container">
-          <div className="slider-label"><span>Static</span><span>{Math.round(value.start)}%</span></div>
-          <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value), end: parseInt(e.target.value) })} />
-        </div>
-      ) : (
-        <div className="animation-sliders">
-          <div className="slider-container">
-            <div className="slider-label"><span>Start</span><span>{Math.round(value.start)}%</span></div>
-            <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value) })} />
-          </div>
-          <div className="slider-container">
-            <div className="slider-label"><span>End</span><span>{Math.round(value.end)}%</span></div>
-            <input type="range" value={value.end} onChange={(e) => onChange({ ...value, end: parseInt(e.target.value) })} />
-          </div>
-        </div>
-      ))}
-      {extra}
-    </div>
-  );
+    );
+  };
 
   // Calculate selection box position relative to the actual image for display
   const getSelectionStyle = useCallback(() => {
@@ -720,6 +814,32 @@ export default function App() {
                     )}
                   </div>
                 )}
+
+                {/* History Gallery Overlay */}
+                {history.length > 0 && (
+                  <div className={`history-gallery ${!showHistory ? 'hidden' : ''}`}>
+                    <button className="gallery-toggle" onClick={() => setShowHistory(!showHistory)}>
+                      {showHistory ? <X size={14} /> : <ImageIcon size={14} />} {showHistory ? 'Hide History' : 'Show History'}
+                    </button>
+                    <div className="history-header">
+                      <h3><Activity size={14} /> Session History</h3>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{history.length} versions</span>
+                    </div>
+                    <div className="history-items">
+                      {history.map(item => (
+                        <div
+                          key={item.id}
+                          className={`history-item ${outputGif === item.url ? 'active' : ''}`}
+                          onClick={() => { setOutputGif(item.url); setShowComparison(true); }}
+                        >
+                          <img src={item.url} alt="History version" />
+                          <div className="item-time">{item.timestamp}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {isProcessing && <div className="processing-overlay"><div className="loader"></div><p>{status} {progress}%</p></div>}
               </div>
             )}
@@ -737,7 +857,10 @@ export default function App() {
             </div>
           )}
         </section>
-        <aside className="controls-panel">
+
+        <div className={`sidebar-resizer ${isResizingSidebar ? 'active' : ''}`} onMouseDown={startResizing} />
+
+        <aside className="controls-panel" style={{ width: `${sidebarWidth}px` }}>
           <div className="control-group">
             <h3><Palette size={14} /> Color Library</h3>
             <div className="preset-grid">
@@ -760,9 +883,9 @@ export default function App() {
           </div>
 
           <div className="control-group">
-            <div className="control-header">
+            <div className="control-header" onClick={() => setUseSelection(!useSelection)} style={{ cursor: 'pointer' }}>
               <h3><Layers size={14} /> Region Mask</h3>
-              <button className={`animate-toggle ${useSelection ? 'active' : ''}`} onClick={() => { setUseSelection(!useSelection); setShowComparison(false); setOutputGif(null); }} title="Toggle Selection Tool">
+              <button className={`animate-toggle ${useSelection ? 'active' : ''}`} onClick={(e) => { e.stopPropagation(); setUseSelection(!useSelection); setShowComparison(false); setOutputGif(null); }} title="Toggle Selection Tool">
                 <Box size={14} />
               </button>
             </div>
@@ -780,23 +903,23 @@ export default function App() {
             )}
           </div>
 
-          <ControlSlider title="Downscale Factor" value={{ start: downscale }} onChange={null} icon={Box} extra={
+          <ControlSlider id="downscale" title="Downscale Factor" value={{ start: downscale }} onChange={null} icon={Box} extra={
             <div className="slider-container">
               <div className="slider-label"><span>Factor</span><span>{downscale}x</span></div>
               <input type="range" min="1" max="8" step="1" value={downscale} onChange={(e) => setDownscale(parseInt(e.target.value))} />
             </div>
           } />
 
-          <ControlSlider title="Pixel Sort" value={pixelSort} onChange={setPixelSort} icon={ArrowRight} extra={
+          <ControlSlider id="pixelSort" title="Pixel Sort" value={pixelSort} onChange={setPixelSort} icon={ArrowRight} extra={
             <div className="slider-container">
               <div className="slider-label"><span>Threshold</span><span>{pixelSort.threshold}%</span></div>
               <input type="range" value={pixelSort.threshold} onChange={(e) => setPixelSort({ ...pixelSort, threshold: parseInt(e.target.value) })} />
             </div>
           } />
 
-          <ControlSlider title="Dither Strength" value={retro} onChange={setRetro} icon={Activity} />
-          <ControlSlider title="CRT Scanlines" value={crt} onChange={setCrt} icon={Tv} />
-          <ControlSlider title="Phosphor Glow" value={glow} onChange={setGlow} icon={Zap} />
+          <ControlSlider id="retro" title="Dither Strength" value={retro} onChange={setRetro} icon={Activity} />
+          <ControlSlider id="crt" title="CRT Scanlines" value={crt} onChange={setCrt} icon={Tv} />
+          <ControlSlider id="glow" title="Phosphor Glow" value={glow} onChange={setGlow} icon={Zap} />
           <div className="control-group">
             <h3><Activity size={14} /> Utility</h3>
             <div className="slider-container"><div className="slider-label"><span>Noisy Glitch</span><span>{glitch.start}%</span></div><input type="range" value={glitch.start} onChange={(e) => setGlitch({ ...glitch, start: parseInt(e.target.value), end: parseInt(e.target.value) })} /></div>
