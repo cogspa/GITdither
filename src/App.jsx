@@ -96,6 +96,7 @@ export default function App() {
 
   const fileInputRef = useRef(null);
   const comparisonRef = useRef(null);
+  const previewImgRef = useRef(null);
 
   // Comparison slider mouse/touch handling
   const handleSliderInteraction = useCallback((clientX) => {
@@ -134,20 +135,20 @@ export default function App() {
 
   // Selection mouse handling
   const handleSelectionStart = (e) => {
-    if (!useSelection || showComparison) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    if (!useSelection || showComparison || !previewImgRef.current) return;
+    const rect = previewImgRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
     setSelectionStart({ x, y });
     setIsResizingSelection(true);
     setSelection({ x, y, w: 0, h: 0 });
   };
 
   const handleSelectionMove = (e) => {
-    if (!isResizingSelection) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    if (!isResizingSelection || !previewImgRef.current) return;
+    const rect = previewImgRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
 
     setSelection({
       x: Math.min(x, selectionStart.x),
@@ -343,14 +344,15 @@ export default function App() {
         if (distFromEnd < falloffFrames) t = Math.min(t, distFromEnd / falloffFrames);
       }
 
-      // Check if pixel is in selection
-      const isInSelection = (px, py, w, h) => {
-        if (!useSelection) return true;
-        const sx = (selection.x / 100) * w;
-        const sy = (selection.y / 100) * h;
-        const sw = (selection.w / 100) * w;
-        const sh = (selection.h / 100) * h;
-        return px >= sx && px <= sx + sw && py >= sy && py <= sy + sh;
+      // Check if pixel is in selection (use base dimensions, not working dimensions)
+      const isInSelection = (px, py, currentW, currentH) => {
+        if (!useSelection || selection.w === 0 || selection.h === 0) return true;
+        // Convert percentage to pixel in current working dimensions
+        const sx = (selection.x / 100) * currentW;
+        const sy = (selection.y / 100) * currentH;
+        const sw = (selection.w / 100) * currentW;
+        const sh = (selection.h / 100) * currentH;
+        return px >= sx && px < sx + sw && py >= sy && py < sy + sh;
       };
 
       if (t > 0) {
@@ -565,8 +567,13 @@ export default function App() {
                     onMouseDown={handleSelectionStart}
                     onMouseMove={handleSelectionMove}
                   >
-                    <img src={outputGif || originalGif} alt="Preview" draggable={false} />
-                    {useSelection && !outputGif && (
+                    <img
+                      ref={previewImgRef}
+                      src={outputGif || originalGif}
+                      alt="Preview"
+                      draggable={false}
+                    />
+                    {useSelection && !outputGif && selection.w > 0 && selection.h > 0 && (
                       <div
                         className="selection-box"
                         style={{
