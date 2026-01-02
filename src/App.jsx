@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X } from 'lucide-react';
+import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import gifFrames from 'gif-frames';
 import GIF from 'gif.js';
@@ -17,6 +17,38 @@ const bayerMatrix8x8 = [
   [63, 31, 55, 23, 61, 29, 53, 21]
 ];
 
+const DITHER_ALGOS = {
+  'Bayer': { type: 'ordered' },
+  'Floyd-Steinberg': {
+    type: 'diffusion',
+    kernel: [
+      { x: 1, y: 0, w: 7 / 16 },
+      { x: -1, y: 1, w: 3 / 16 },
+      { x: 0, y: 1, w: 5 / 16 },
+      { x: 1, y: 1, w: 1 / 16 }
+    ]
+  },
+  'Atkinson': {
+    type: 'diffusion',
+    kernel: [
+      { x: 1, y: 0, w: 1 / 8 },
+      { x: 2, y: 0, w: 1 / 8 },
+      { x: -1, y: 1, w: 1 / 8 },
+      { x: 0, y: 1, w: 1 / 8 },
+      { x: 1, y: 1, w: 1 / 8 },
+      { x: 0, y: 2, w: 1 / 8 }
+    ]
+  },
+  'Sierra Lite': {
+    type: 'diffusion',
+    kernel: [
+      { x: 1, y: 0, w: 2 / 4 },
+      { x: -1, y: 1, w: 1 / 4 },
+      { x: 0, y: 1, w: 1 / 4 }
+    ]
+  }
+};
+
 const PRESET_PALETTES = {
   'True Color': null,
   'Gameboy': ['#0f380f', '#306230', '#8bac0f', '#9bbc0f'],
@@ -27,10 +59,10 @@ const PRESET_PALETTES = {
 };
 
 const ASPECT_RATIOS = [
-  { label: '1:1', value: 1, icon: 'Square' },
-  { label: '9:16', value: 9 / 16, icon: 'Smartphone' },
-  { label: '16:9', value: 16 / 9, icon: 'Monitor' },
-  { label: '4:5', value: 4 / 5, icon: 'Image' }
+  { label: '1:1', value: 1 },
+  { label: '9:16', value: 9 / 16 },
+  { label: '16:9', value: 16 / 9 },
+  { label: '4:5', value: 4 / 5 }
 ];
 
 export default function App() {
@@ -48,6 +80,7 @@ export default function App() {
   const [falloff, setFalloff] = useState(20);
   const [aspectRatio, setAspectRatio] = useState(1);
   const [status, setStatus] = useState('');
+  const [ditherAlgo, setDitherAlgo] = useState('Bayer');
 
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
@@ -113,7 +146,6 @@ export default function App() {
     setStatus('Analyzing colors...');
 
     setTimeout(() => {
-      // Sample colors from the first frame
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const firstFrame = frames[0];
@@ -124,16 +156,13 @@ export default function App() {
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imageData.data;
       const samples = [];
-      const step = Math.floor(data.length / 4000) * 4; // Sample ~1000 pixels
+      const step = Math.floor(data.length / 4000) * 4;
 
       for (let i = 0; i < data.length; i += step) {
         samples.push([data[i], data[i + 1], data[i + 2]]);
       }
 
-      // Simple 8-color K-means initial centroids
       let centroids = samples.slice(0, 8);
-
-      // 5 iterations for speed
       for (let iter = 0; iter < 5; iter++) {
         const clusters = Array.from({ length: 8 }, () => []);
         for (const s of samples) {
@@ -166,7 +195,6 @@ export default function App() {
     setProgress(0);
     setStatus('Preparing Palette...');
 
-    // Pre-cache palette RGBs to avoid chroma() calls in the pixel loop
     const rawPalette = selectedPaletteName === 'Custom' ? customPalette : PRESET_PALETTES[selectedPaletteName];
     const cachedPalette = rawPalette ? rawPalette.map(c => chroma(c).rgb()) : null;
 
@@ -185,8 +213,10 @@ export default function App() {
     for (let index = 0; index < frames.length; index++) {
       const originalFrame = frames[index];
       const canvas = document.createElement('canvas');
-      canvas.width = originalFrame.width;
-      canvas.height = originalFrame.height;
+      const width = originalFrame.width;
+      const height = originalFrame.height;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(originalFrame, 0, 0);
 
@@ -201,47 +231,97 @@ export default function App() {
       }
 
       if (t > 0) {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
         const strength = (retro / 100) * t;
         const pStep = Math.floor(painterly / 10) + 1;
+        const algo = DITHER_ALGOS[ditherAlgo];
 
-        for (let i = 0; i < data.length; i += 4) {
-          let r = data[i], g = data[i + 1], b = data[i + 2];
+        if (algo.type === 'diffusion') {
+          // Error Diffusion Dithering (Floyd-Steinberg, Atkinson, etc.)
+          // We use a float buffer to accumulate errors
+          const errorBuffer = new Float32Array(data.length);
+          for (let i = 0; i < data.length; i++) errorBuffer[i] = data[i];
 
-          // Painterly
-          if (painterly > 0) {
-            r = Math.round(r / (pStep * 20)) * (pStep * 20);
-            g = Math.round(g / (pStep * 20)) * (pStep * 20);
-            b = Math.round(b / (pStep * 20)) * (pStep * 20);
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const i = (y * width + x) * 4;
+              let r = errorBuffer[i], g = errorBuffer[i + 1], b = errorBuffer[i + 2];
+
+              // Painterly
+              if (painterly > 0) {
+                r = Math.round(r / (pStep * 20)) * (pStep * 20);
+                g = Math.round(g / (pStep * 20)) * (pStep * 20);
+                b = Math.round(b / (pStep * 20)) * (pStep * 20);
+              }
+
+              // Nearest Color
+              let [nr, ng, nb] = cachedPalette
+                ? getNearestColor(r, g, b, cachedPalette)
+                : [r > 127 ? 255 : 0, g > 127 ? 255 : 0, b > 127 ? 255 : 0];
+
+              // Blend based on strength
+              const blendR = r + (nr - r) * strength;
+              const blendG = g + (ng - g) * strength;
+              const blendB = b + (nb - b) * strength;
+
+              data[i] = blendR; data[i + 1] = blendG; data[i + 2] = blendB;
+
+              // Error Distribution
+              const er = r - blendR;
+              const eg = g - blendG;
+              const eb = b - blendB;
+
+              for (const k of algo.kernel) {
+                const nx = x + k.x;
+                const ny = y + k.y;
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                  const ni = (ny * width + nx) * 4;
+                  errorBuffer[ni] += er * k.w;
+                  errorBuffer[ni + 1] += eg * k.w;
+                  errorBuffer[ni + 2] += eb * k.w;
+                }
+              }
+
+              // Glitch
+              if (glitch > 0 && Math.random() < (glitch / 5000) * t) {
+                data[i] = data[i + 20] || data[i];
+              }
+            }
           }
+        } else {
+          // Ordered Dithering (Bayer)
+          for (let i = 0; i < data.length; i += 4) {
+            let r = data[i], g = data[i + 1], b = data[i + 2];
 
-          // Dither
-          if (retro > 0) {
-            const x = (i / 4) % canvas.width;
-            const y = Math.floor((i / 4) / canvas.width);
-            const threshold = bayerMatrix8x8[y % 8][x % 8] / 64 * 255;
+            if (painterly > 0) {
+              r = Math.round(r / (pStep * 20)) * (pStep * 20);
+              g = Math.round(g / (pStep * 20)) * (pStep * 20);
+              b = Math.round(b / (pStep * 20)) * (pStep * 20);
+            }
 
-            const dr = r > threshold ? 255 : 0;
-            const dg = g > threshold ? 255 : 0;
-            const db = b > threshold ? 255 : 0;
+            if (retro > 0) {
+              const x = (i / 4) % width;
+              const y = Math.floor((i / 4) / width);
+              const threshold = bayerMatrix8x8[y % 8][x % 8] / 64 * 255;
+              const dr = r > threshold ? 255 : 0;
+              const dg = g > threshold ? 255 : 0;
+              const db = b > threshold ? 255 : 0;
+              r = r + (dr - r) * strength;
+              g = g + (dg - g) * strength;
+              b = b + (db - b) * strength;
+            }
 
-            r = r + (dr - r) * strength;
-            g = g + (dg - g) * strength;
-            b = b + (db - b) * strength;
-          }
+            if (cachedPalette) {
+              const [nr, ng, nb] = getNearestColor(r, g, b, cachedPalette);
+              data[i] = nr; data[i + 1] = ng; data[i + 2] = nb;
+            } else {
+              data[i] = r; data[i + 1] = g; data[i + 2] = b;
+            }
 
-          // Palette Mapping
-          if (cachedPalette) {
-            const [nr, ng, nb] = getNearestColor(r, g, b, cachedPalette);
-            data[i] = nr; data[i + 1] = ng; data[i + 2] = nb;
-          } else {
-            data[i] = r; data[i + 1] = g; data[i + 2] = b;
-          }
-
-          // Glitch (simplified inside loop for speed)
-          if (glitch > 0 && Math.random() < (glitch / 5000) * t) {
-            data[i] = data[i + 20] || data[i];
+            if (glitch > 0 && Math.random() < (glitch / 5000) * t) {
+              data[i] = data[i + 20] || data[i];
+            }
           }
         }
         ctx.putImageData(imageData, 0, 0);
@@ -251,7 +331,6 @@ export default function App() {
       setProgress(Math.round(((index + 1) / frames.length) * 50));
       setStatus(`Processing: ${index + 1}/${frames.length}`);
 
-      // Yield to UI thread every few frames to prevent "Unresponsive" error
       if (index % 5 === 0) {
         await new Promise(r => setTimeout(r, 0));
       }
@@ -291,10 +370,7 @@ export default function App() {
 
       <main>
         <section className="preview-area">
-          <div
-            className={`upload-zone ${!originalGif ? 'empty' : ''}`}
-            onClick={() => !originalGif && fileInputRef.current.click()}
-          >
+          <div className={`upload-zone ${!originalGif ? 'empty' : ''}`} onClick={() => !originalGif && fileInputRef.current.click()}>
             <input type="file" ref={fileInputRef} hidden accept="image/gif" onChange={handleFileUpload} />
             {!originalGif ? (
               <div className="upload-prompt">
@@ -347,12 +423,7 @@ export default function App() {
                   {name}
                 </button>
               ))}
-              <button
-                className={`preset-button ${selectedPaletteName === 'Custom' ? 'active' : ''}`}
-                onClick={() => setSelectedPaletteName('Custom')}
-              >
-                Custom
-              </button>
+              <button className={`preset-button ${selectedPaletteName === 'Custom' ? 'active' : ''}`} onClick={() => setSelectedPaletteName('Custom')}>Custom</button>
             </div>
 
             <div className="palette-preview">
@@ -363,9 +434,7 @@ export default function App() {
 
             {selectedPaletteName === 'Custom' && (
               <div className="custom-palette-actions">
-                <button className="preset-button" onClick={runKMeans} disabled={isAutoClustering}>
-                  {isAutoClustering ? 'Analyzing...' : 'Auto-Extract'}
-                </button>
+                <button className="preset-button" onClick={runKMeans} disabled={isAutoClustering}>{isAutoClustering ? 'Analyzing...' : 'Auto-Extract'}</button>
                 <div className="color-adder">
                   <input type="color" onChange={(e) => setCustomPalette([...customPalette, e.target.value])} title="Add Color" />
                   <button className="preset-button" onClick={() => setCustomPalette([])}><Plus size={14} /></button>
@@ -375,9 +444,24 @@ export default function App() {
           </div>
 
           <div className="control-group">
+            <h3><Grid size={14} /> Dither Algorithm</h3>
+            <div className="preset-grid">
+              {Object.keys(DITHER_ALGOS).map(algo => (
+                <button
+                  key={algo}
+                  className={`preset-button ${ditherAlgo === algo ? 'active' : ''}`}
+                  onClick={() => setDitherAlgo(algo)}
+                >
+                  {algo}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="control-group">
             <h3><Zap size={14} /> Master Effects</h3>
             <div className="slider-container">
-              <div className="slider-label"><span>Crispy Retro</span><span>{retro}%</span></div>
+              <div className="slider-label"><span>Dither Strength</span><span>{retro}%</span></div>
               <input type="range" value={retro} onChange={(e) => setRetro(parseInt(e.target.value))} />
             </div>
             <div className="slider-container">
