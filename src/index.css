@@ -739,3 +739,75 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .gallery-toggle:hover {
   color: white;
 }
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  .app-container {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
+  main {
+    flex-direction: column;
+    height: auto;
+    overflow: visible;
+  }
+
+  .preview-area {
+    height: auto;
+    min-height: 350px;
+    padding: 1rem;
+    flex: none;
+  }
+
+  .sidebar-resizer {
+    display: none;
+  }
+
+  .controls-panel {
+    width: 100% !important;
+    height: auto;
+    border-left: none;
+    border-top: 1px solid var(--border-color);
+    padding: 1.5rem;
+    overflow: visible;
+  }
+
+  .history-gallery {
+    height: 140px;
+  }
+
+  .history-item {
+    width: 70px;
+    height: 70px;
+  }
+
+  .gallery-toggle {
+    right: 1rem;
+    padding: 6px 12px;
+  }
+
+  /* Touch enhancements */
+  input[type="range"] {
+    height: 10px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+  }
+
+  .preset-button, .action-button {
+    padding: 1rem;
+    min-height: 48px;
+  }
+
+  .control-header {
+    padding: 8px 0;
+  }
+
+  .upload-zone {
+    height: 300px;
+  }
+}

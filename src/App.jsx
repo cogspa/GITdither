@@ -95,6 +95,14 @@ export default function App() {
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [showHistory, setShowHistory] = useState(true);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Handle Resize for Mobile Check
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
@@ -216,13 +224,13 @@ export default function App() {
   }, []);
 
   const resize = useCallback((e) => {
-    if (isResizingSidebar) {
+    if (isResizingSidebar && !isMobile) {
       const newWidth = window.innerWidth - e.clientX;
       if (newWidth > 250 && newWidth < 800) {
         setSidebarWidth(newWidth);
       }
     }
-  }, [isResizingSidebar]);
+  }, [isResizingSidebar, isMobile]);
 
   useEffect(() => {
     if (isResizingSidebar) {
@@ -748,7 +756,7 @@ export default function App() {
   return (
     <div className="app-container">
       <header>
-        <div className="logo">DITHER LAB</div>
+        <div className="logo">GIF DITHER LAB</div>
         <div className="header-actions">
           {originalGif && (
             <button className="preset-button" onClick={() => { setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]); setShowComparison(false); }}><Trash2 size={16} /> Reset</button>
@@ -860,7 +868,7 @@ export default function App() {
 
         <div className={`sidebar-resizer ${isResizingSidebar ? 'active' : ''}`} onMouseDown={startResizing} />
 
-        <aside className="controls-panel" style={{ width: `${sidebarWidth}px` }}>
+        <aside className="controls-panel" style={{ width: isMobile ? '100%' : `${sidebarWidth}px` }}>
           <div className="control-group">
             <h3><Palette size={14} /> Color Library</h3>
             <div className="preset-grid">
