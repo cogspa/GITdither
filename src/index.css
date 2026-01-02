@@ -52,6 +52,30 @@ header {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.instructions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.instructions span {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.header-brand {
+  display: flex;
+  flex-direction: column;
 }
 
 main {
@@ -642,6 +666,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
     opacity: 1;
   }
 }
+
 /* History Gallery */
 .history-gallery {
   position: absolute;
@@ -798,7 +823,8 @@ input[type="range"]::-webkit-slider-thumb:hover {
     height: 20px;
   }
 
-  .preset-button, .action-button {
+  .preset-button,
+  .action-button {
     padding: 1rem;
     min-height: 48px;
   }

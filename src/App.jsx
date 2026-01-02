@@ -756,7 +756,18 @@ export default function App() {
   return (
     <div className="app-container">
       <header>
-        <div className="logo">GIF DITHER LAB</div>
+        <div className="header-brand">
+          <div className="logo">GIF DITHER LAB</div>
+          <div className="instructions">
+            <span>1. Upload GIF</span>
+            <ArrowRight size={10} />
+            <span>2. Tweak Effects</span>
+            <ArrowRight size={10} />
+            <span>3. Mask Region</span>
+            <ArrowRight size={10} />
+            <span>4. Export</span>
+          </div>
+        </div>
         <div className="header-actions">
           {originalGif && (
             <button className="preset-button" onClick={() => { setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]); setShowComparison(false); }}><Trash2 size={16} /> Reset</button>
