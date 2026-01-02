@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "canvas-dither": "^1.0.1",
+    "chroma-js": "^3.2.0",
     "framer-motion": "^12.23.26",
     "gif-frames": "^1.0.1",
     "gif.js": "^0.2.0",
