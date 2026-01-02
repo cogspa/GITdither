@@ -80,6 +80,7 @@ export default function App() {
   const [ditherAlgo, setDitherAlgo] = useState('Bayer');
   const [compareSplit, setCompareSplit] = useState(50);
   const [showComparison, setShowComparison] = useState(false);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   // Palette State
   const [selectedPaletteName, setSelectedPaletteName] = useState('True Color');
@@ -98,6 +99,8 @@ export default function App() {
       setOriginalGif(url);
       const frameData = await gifFrames({ url, frames: 'all', outputType: 'canvas', cumulative: true });
       const extractedFrames = frameData.map(f => f.getImage());
+      const first = extractedFrames[0];
+      setDimensions({ width: first.width, height: first.height });
       setFrames(extractedFrames);
       setFrameRange([0, extractedFrames.length - 1]);
       setStatus('GIF loaded.');
@@ -423,13 +426,31 @@ export default function App() {
             ) : (
               <div className="preview-container">
                 {outputGif && showComparison ? (
-                  <div className="comparison-slider" style={{ '--split': `${compareSplit}%` }}>
+                  <div
+                    className="comparison-slider"
+                    style={{
+                      '--split': `${compareSplit}%`,
+                      aspectRatio: `${dimensions.width} / ${dimensions.height}`,
+                      maxWidth: '100%',
+                      maxHeight: '100%'
+                    }}
+                  >
                     <img src={originalGif} className="compare-original" alt="Original" />
                     <img src={outputGif} className="compare-output" alt="Result" />
                     <div className="compare-handle" style={{ left: `${compareSplit}%` }}>
-                      <MoveHorizontal size={24} color="white" />
+                      <div className="handle-line"></div>
+                      <div className="handle-circle">
+                        <MoveHorizontal size={16} />
+                      </div>
                     </div>
-                    <input type="range" className="compare-input" min="0" max="100" value={compareSplit} onChange={(e) => setCompareSplit(e.target.value)} />
+                    <input
+                      type="range"
+                      className="compare-input"
+                      min="0"
+                      max="100"
+                      value={compareSplit}
+                      onChange={(e) => setCompareSplit(e.target.value)}
+                    />
                   </div>
                 ) : (
                   <img src={outputGif || originalGif} alt="Preview" />
