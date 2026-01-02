@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu } from 'lucide-react';
+import { Upload, Download, Sliders, Layers, Monitor, Image as ImageIcon, Zap, Palette, Trash2, ArrowRight, Plus, X, Grid, Cpu, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import gifFrames from 'gif-frames';
 import GIF from 'gif.js';
@@ -58,13 +58,6 @@ const PRESET_PALETTES = {
   'Cyber': ['#050505', '#00f2ff', '#ff00ea', '#7000ff']
 };
 
-const ASPECT_RATIOS = [
-  { label: '1:1', value: 1 },
-  { label: '9:16', value: 9 / 16 },
-  { label: '16:9', value: 16 / 9 },
-  { label: '4:5', value: 4 / 5 }
-];
-
 export default function App() {
   const [originalGif, setOriginalGif] = useState(null);
   const [frames, setFrames] = useState([]);
@@ -72,13 +65,13 @@ export default function App() {
   const [outputGif, setOutputGif] = useState(null);
   const [progress, setProgress] = useState(0);
 
-  // Controls
-  const [retro, setRetro] = useState(50);
-  const [glitch, setGlitch] = useState(0);
-  const [painterly, setPainterly] = useState(0);
+  // Core Controls
+  const [retro, setRetro] = useState({ start: 50, end: 50, animate: false });
+  const [glitch, setGlitch] = useState({ start: 0, end: 100, animate: false });
+  const [painterly, setPainterly] = useState({ start: 0, end: 100, animate: false });
+
   const [frameRange, setFrameRange] = useState([0, 100]);
   const [falloff, setFalloff] = useState(20);
-  const [aspectRatio, setAspectRatio] = useState(1);
   const [status, setStatus] = useState('');
   const [ditherAlgo, setDitherAlgo] = useState('Bayer');
 
@@ -122,19 +115,13 @@ export default function App() {
   const getNearestColor = (r, g, b, cachedPalette) => {
     let minDistance = Infinity;
     let closestR = r, closestG = g, closestB = b;
-
     for (let i = 0; i < cachedPalette.length; i++) {
       const p = cachedPalette[i];
-      const dr = r - p[0];
-      const dg = g - p[1];
-      const db = b - p[2];
+      const dr = r - p[0], dg = g - p[1], db = b - p[2];
       const dist = dr * dr + dg * dg + db * db;
-
       if (dist < minDistance) {
         minDistance = dist;
-        closestR = p[0];
-        closestG = p[1];
-        closestB = p[2];
+        closestR = p[0]; closestG = p[1]; closestB = p[2];
       }
     }
     return [closestR, closestG, closestB];
@@ -144,30 +131,24 @@ export default function App() {
     if (frames.length === 0) return;
     setIsAutoClustering(true);
     setStatus('Analyzing colors...');
-
     setTimeout(() => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const firstFrame = frames[0];
-      canvas.width = firstFrame.width;
-      canvas.height = firstFrame.height;
+      canvas.width = firstFrame.width; canvas.height = firstFrame.height;
       ctx.drawImage(firstFrame, 0, 0);
-
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imageData.data;
       const samples = [];
       const step = Math.floor(data.length / 4000) * 4;
-
       for (let i = 0; i < data.length; i += step) {
         samples.push([data[i], data[i + 1], data[i + 2]]);
       }
-
       let centroids = samples.slice(0, 8);
       for (let iter = 0; iter < 5; iter++) {
         const clusters = Array.from({ length: 8 }, () => []);
         for (const s of samples) {
-          let bestDist = Infinity;
-          let bestIdx = 0;
+          let bestDist = Infinity, bestIdx = 0;
           for (let i = 0; i < centroids.length; i++) {
             const d = Math.pow(s[0] - centroids[i][0], 2) + Math.pow(s[1] - centroids[i][1], 2) + Math.pow(s[2] - centroids[i][2], 2);
             if (d < bestDist) { bestDist = d; bestIdx = i; }
@@ -180,14 +161,14 @@ export default function App() {
           return [sum[0] / c.length, sum[1] / c.length, sum[2] / c.length];
         });
       }
-
-      const foundPalette = centroids.map(c => chroma(c).hex());
-      setCustomPalette(foundPalette);
+      setCustomPalette(centroids.map(c => chroma(c).hex()));
       setSelectedPaletteName('Custom');
       setIsAutoClustering(false);
       setStatus('Palette generated!');
     }, 100);
   };
+
+  const lerp = (v0, v1, t) => v0 * (1 - t) + v1 * t;
 
   const processGif = async () => {
     if (frames.length === 0) return;
@@ -213,14 +194,12 @@ export default function App() {
     for (let index = 0; index < frames.length; index++) {
       const originalFrame = frames[index];
       const canvas = document.createElement('canvas');
-      const width = originalFrame.width;
-      const height = originalFrame.height;
-      canvas.width = width;
-      canvas.height = height;
+      const width = originalFrame.width, height = originalFrame.height;
+      canvas.width = width; canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(originalFrame, 0, 0);
 
-      let t = 0;
+      let t = 0; // Range inclusion factor
       if (index >= start && index <= end) {
         t = 1;
         const distFromStart = index - start;
@@ -233,13 +212,18 @@ export default function App() {
       if (t > 0) {
         const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
-        const strength = (retro / 100) * t;
-        const pStep = Math.floor(painterly / 10) + 1;
+
+        // Calculate Dynamic Keyframe values for this frame
+        const animProgress = (index - start) / totalSelected;
+        const currentRetro = retro.animate ? lerp(retro.start, retro.end, animProgress) : retro.start;
+        const currentGlitch = glitch.animate ? lerp(glitch.start, glitch.end, animProgress) : glitch.start;
+        const currentPainterly = painterly.animate ? lerp(painterly.start, painterly.end, animProgress) : painterly.start;
+
+        const strength = (currentRetro / 100) * t;
+        const pStep = Math.floor(currentPainterly / 10) + 1;
         const algo = DITHER_ALGOS[ditherAlgo];
 
         if (algo.type === 'diffusion') {
-          // Error Diffusion Dithering (Floyd-Steinberg, Atkinson, etc.)
-          // We use a float buffer to accumulate errors
           const errorBuffer = new Float32Array(data.length);
           for (let i = 0; i < data.length; i++) errorBuffer[i] = data[i];
 
@@ -248,78 +232,56 @@ export default function App() {
               const i = (y * width + x) * 4;
               let r = errorBuffer[i], g = errorBuffer[i + 1], b = errorBuffer[i + 2];
 
-              // Painterly
-              if (painterly > 0) {
+              if (currentPainterly > 0) {
                 r = Math.round(r / (pStep * 20)) * (pStep * 20);
                 g = Math.round(g / (pStep * 20)) * (pStep * 20);
                 b = Math.round(b / (pStep * 20)) * (pStep * 20);
               }
 
-              // Nearest Color
               let [nr, ng, nb] = cachedPalette
                 ? getNearestColor(r, g, b, cachedPalette)
                 : [r > 127 ? 255 : 0, g > 127 ? 255 : 0, b > 127 ? 255 : 0];
 
-              // Blend based on strength
               const blendR = r + (nr - r) * strength;
               const blendG = g + (ng - g) * strength;
               const blendB = b + (nb - b) * strength;
-
               data[i] = blendR; data[i + 1] = blendG; data[i + 2] = blendB;
 
-              // Error Distribution
-              const er = r - blendR;
-              const eg = g - blendG;
-              const eb = b - blendB;
-
+              const er = r - blendR, eg = g - blendG, eb = b - blendB;
               for (const k of algo.kernel) {
-                const nx = x + k.x;
-                const ny = y + k.y;
+                const nx = x + k.x, ny = y + k.y;
                 if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                   const ni = (ny * width + nx) * 4;
-                  errorBuffer[ni] += er * k.w;
-                  errorBuffer[ni + 1] += eg * k.w;
-                  errorBuffer[ni + 2] += eb * k.w;
+                  errorBuffer[ni] += er * k.w; errorBuffer[ni + 1] += eg * k.w; errorBuffer[ni + 2] += eb * k.w;
                 }
               }
 
-              // Glitch
-              if (glitch > 0 && Math.random() < (glitch / 5000) * t) {
+              if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) {
                 data[i] = data[i + 20] || data[i];
               }
             }
           }
         } else {
-          // Ordered Dithering (Bayer)
           for (let i = 0; i < data.length; i += 4) {
             let r = data[i], g = data[i + 1], b = data[i + 2];
-
-            if (painterly > 0) {
+            if (currentPainterly > 0) {
               r = Math.round(r / (pStep * 20)) * (pStep * 20);
               g = Math.round(g / (pStep * 20)) * (pStep * 20);
               b = Math.round(b / (pStep * 20)) * (pStep * 20);
             }
-
-            if (retro > 0) {
-              const x = (i / 4) % width;
-              const y = Math.floor((i / 4) / width);
+            if (currentRetro > 0) {
+              const x = (i / 4) % width, y = Math.floor((i / 4) / width);
               const threshold = bayerMatrix8x8[y % 8][x % 8] / 64 * 255;
-              const dr = r > threshold ? 255 : 0;
-              const dg = g > threshold ? 255 : 0;
-              const db = b > threshold ? 255 : 0;
-              r = r + (dr - r) * strength;
-              g = g + (dg - g) * strength;
-              b = b + (db - b) * strength;
+              const dr = r > threshold ? 255 : 0, dg = g > threshold ? 255 : 0, db = b > threshold ? 255 : 0;
+              r = r + (dr - r) * strength; g = g + (dg - g) * strength; b = b + (db - b) * strength;
             }
-
             if (cachedPalette) {
               const [nr, ng, nb] = getNearestColor(r, g, b, cachedPalette);
               data[i] = nr; data[i + 1] = ng; data[i + 2] = nb;
             } else {
               data[i] = r; data[i + 1] = g; data[i + 2] = b;
             }
-
-            if (glitch > 0 && Math.random() < (glitch / 5000) * t) {
+            if (currentGlitch > 0 && Math.random() < (currentGlitch / 5000) * t) {
               data[i] = data[i + 20] || data[i];
             }
           }
@@ -330,25 +292,46 @@ export default function App() {
       gif.addFrame(canvas, { delay: 100, copy: true });
       setProgress(Math.round(((index + 1) / frames.length) * 50));
       setStatus(`Processing: ${index + 1}/${frames.length}`);
-
-      if (index % 5 === 0) {
-        await new Promise(r => setTimeout(r, 0));
-      }
+      if (index % 5 === 0) await new Promise(r => setTimeout(r, 0));
     }
 
-    gif.on('progress', (p) => {
-      setProgress(50 + Math.round(p * 50));
-      setStatus(`Rendering: ${Math.round(p * 100)}%`);
-    });
-
-    gif.on('finished', (blob) => {
-      setOutputGif(URL.createObjectURL(blob));
-      setIsProcessing(false);
-      setStatus('Done!');
-    });
-
+    gif.on('progress', p => { setProgress(50 + Math.round(p * 50)); setStatus(`Rendering: ${Math.round(p * 100)}%`); });
+    gif.on('finished', blob => { setOutputGif(URL.createObjectURL(blob)); setIsProcessing(false); setStatus('Done!'); });
     gif.render();
   };
+
+  const ControlSlider = ({ title, value, onChange, icon: Icon }) => (
+    <div className="control-group">
+      <div className="control-header">
+        <h3><Icon size={14} /> {title}</h3>
+        <button
+          className={`animate-toggle ${value.animate ? 'active' : ''}`}
+          onClick={() => onChange({ ...value, animate: !value.animate })}
+          title="Toggle Animation"
+        >
+          <Activity size={12} />
+        </button>
+      </div>
+
+      {!value.animate ? (
+        <div className="slider-container">
+          <div className="slider-label"><span>Static</span><span>{Math.round(value.start)}%</span></div>
+          <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value), end: parseInt(e.target.value) })} />
+        </div>
+      ) : (
+        <div className="animation-sliders">
+          <div className="slider-container">
+            <div className="slider-label"><span>Start</span><span>{Math.round(value.start)}%</span></div>
+            <input type="range" value={value.start} onChange={(e) => onChange({ ...value, start: parseInt(e.target.value) })} />
+          </div>
+          <div className="slider-container">
+            <div className="slider-label"><span>End</span><span>{Math.round(value.end)}%</span></div>
+            <input type="range" value={value.end} onChange={(e) => onChange({ ...value, end: parseInt(e.target.value) })} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="app-container">
@@ -357,13 +340,8 @@ export default function App() {
         <div className="header-actions">
           {originalGif && (
             <button className="preset-button" onClick={() => {
-              setOriginalGif(null);
-              setFrames([]);
-              setOutputGif(null);
-              setCustomPalette([]);
-            }}>
-              <Trash2 size={16} /> Reset
-            </button>
+              setOriginalGif(null); setFrames([]); setOutputGif(null); setCustomPalette([]);
+            }}><Trash2 size={16} /> Reset</button>
           )}
         </div>
       </header>
@@ -374,9 +352,7 @@ export default function App() {
             <input type="file" ref={fileInputRef} hidden accept="image/gif" onChange={handleFileUpload} />
             {!originalGif ? (
               <div className="upload-prompt">
-                <motion.div animate={{ y: [0, -10, 0] }} transition={{ repeat: Infinity, duration: 2 }}>
-                  <Upload size={48} color="var(--primary-color)" />
-                </motion.div>
+                <motion.div animate={{ y: [0, -10, 0] }} transition={{ repeat: Infinity, duration: 2 }}><Upload size={48} color="var(--primary-color)" /></motion.div>
                 <h2>Drop your GIF here</h2>
                 <p>or click to browse</p>
               </div>
@@ -415,23 +391,15 @@ export default function App() {
             <h3><Palette size={14} /> Color Library</h3>
             <div className="preset-grid">
               {Object.keys(PRESET_PALETTES).map(name => (
-                <button
-                  key={name}
-                  className={`preset-button ${selectedPaletteName === name ? 'active' : ''}`}
-                  onClick={() => setSelectedPaletteName(name)}
-                >
-                  {name}
-                </button>
+                <button key={name} className={`preset-button ${selectedPaletteName === name ? 'active' : ''}`} onClick={() => setSelectedPaletteName(name)}>{name}</button>
               ))}
               <button className={`preset-button ${selectedPaletteName === 'Custom' ? 'active' : ''}`} onClick={() => setSelectedPaletteName('Custom')}>Custom</button>
             </div>
-
             <div className="palette-preview">
               {(selectedPaletteName === 'Custom' ? customPalette : PRESET_PALETTES[selectedPaletteName])?.map((c, i) => (
                 <div key={i} className="palette-swatch" style={{ background: c }}></div>
               ))}
             </div>
-
             {selectedPaletteName === 'Custom' && (
               <div className="custom-palette-actions">
                 <button className="preset-button" onClick={runKMeans} disabled={isAutoClustering}>{isAutoClustering ? 'Analyzing...' : 'Auto-Extract'}</button>
@@ -447,32 +415,14 @@ export default function App() {
             <h3><Grid size={14} /> Dither Algorithm</h3>
             <div className="preset-grid">
               {Object.keys(DITHER_ALGOS).map(algo => (
-                <button
-                  key={algo}
-                  className={`preset-button ${ditherAlgo === algo ? 'active' : ''}`}
-                  onClick={() => setDitherAlgo(algo)}
-                >
-                  {algo}
-                </button>
+                <button key={algo} className={`preset-button ${ditherAlgo === algo ? 'active' : ''}`} onClick={() => setDitherAlgo(algo)}>{algo}</button>
               ))}
             </div>
           </div>
 
-          <div className="control-group">
-            <h3><Zap size={14} /> Master Effects</h3>
-            <div className="slider-container">
-              <div className="slider-label"><span>Dither Strength</span><span>{retro}%</span></div>
-              <input type="range" value={retro} onChange={(e) => setRetro(parseInt(e.target.value))} />
-            </div>
-            <div className="slider-container">
-              <div className="slider-label"><span>Noisy Glitch</span><span>{glitch}%</span></div>
-              <input type="range" value={glitch} onChange={(e) => setGlitch(parseInt(e.target.value))} />
-            </div>
-            <div className="slider-container">
-              <div className="slider-label"><span>Painterly</span><span>{painterly}%</span></div>
-              <input type="range" value={painterly} onChange={(e) => setPainterly(parseInt(e.target.value))} />
-            </div>
-          </div>
+          <ControlSlider title="Dither Strength" value={retro} onChange={setRetro} icon={Activity} />
+          <ControlSlider title="Noisy Glitch" value={glitch} onChange={setGlitch} icon={Zap} />
+          <ControlSlider title="Painterly" value={painterly} onChange={setPainterly} icon={Monitor} />
 
           <button className="action-button" disabled={!originalGif || isProcessing} onClick={processGif}>
             {isProcessing ? 'Processing...' : 'Run Lab'}
